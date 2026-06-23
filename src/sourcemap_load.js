@@ -10,7 +10,7 @@ import { parseGLB, parseGLBMeshes, TriBVH, meshBackend } from './sourcemap.js';
 
 function concat(arrays) { let n = 0; for (const a of arrays) n += a.length; const o = new Float32Array(n); let p = 0; for (const a of arrays) { o.set(a, p); p += a.length; } return o; }
 
-export function loadSourceMap(glbBuffer, spawns) {
+export function loadSourceMap(glbBuffer, spawns, texturedScene) {
   clearWorld();                                            // also deactivates any prior mesh backend
   // 'windows' = reflective glass (visual+collision); 'clip' = invisible playable-boundary hull
   // (collision only, keeps players inside the real map); everything else is the world.
@@ -26,14 +26,21 @@ export function loadSourceMap(glbBuffer, spawns) {
   meshBackend.clipBvh = clipTris.length ? new TriBVH(clipTris) : null;
   const b = bvh.bounds;
 
-  // world visual: vertex tint (floor/wall/ceiling) × a box-unwrapped procedural detail texture
-  const geo = new THREE.BufferGeometry();
-  geo.setAttribute('position', new THREE.BufferAttribute(worldTris, 3)); geo.computeVertexNormals();
-  geo.setAttribute('color', new THREE.BufferAttribute(vertexColors(worldTris, b), 3));
-  geo.setAttribute('uv', new THREE.BufferAttribute(boxUVs(worldTris, 160), 2));
-  const mat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: .94, metalness: .04, side: THREE.DoubleSide });
-  const detail = makeDetailTexture(); if (detail) { mat.map = detail; mat.needsUpdate = true; }
-  const mesh = new THREE.Mesh(geo, mat); mesh.receiveShadow = true; mesh.castShadow = true; addMapObject(mesh);
+  // world visual: the user's own real textured map (loaded at runtime, never bundled) if
+  // supplied, otherwise a procedural floor/wall/ceiling tint × box-unwrapped detail texture.
+  if (texturedScene) {
+    texturedScene.scale.setScalar(39.3701);                   // VRF metres → source units; aligns with collision/spawns
+    texturedScene.traverse(o => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; if (o.material) o.material.side = THREE.DoubleSide; } });
+    addMapObject(texturedScene);
+  } else {
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(worldTris, 3)); geo.computeVertexNormals();
+    geo.setAttribute('color', new THREE.BufferAttribute(vertexColors(worldTris, b), 3));
+    geo.setAttribute('uv', new THREE.BufferAttribute(boxUVs(worldTris, 160), 2));
+    const mat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: .94, metalness: .04, side: THREE.DoubleSide });
+    const detail = makeDetailTexture(); if (detail) { mat.map = detail; mat.needsUpdate = true; }
+    const mesh = new THREE.Mesh(geo, mat); mesh.receiveShadow = true; mesh.castShadow = true; addMapObject(mesh);
+  }
 
   // window glass: flat semi-reflective panes (collide via the BVH above)
   if (windowTris.length) {

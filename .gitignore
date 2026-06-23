@@ -1,2 +1,4 @@
 .claude/
 .DS_Store
+# optional, user-generated real cs_office textures — never committed (Valve art); see tools/TEXTURES.md
+maps/*.tex.glb
