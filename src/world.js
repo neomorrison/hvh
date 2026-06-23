@@ -6,6 +6,7 @@ import * as THREE from 'three';
 import { scene } from './core.js';
 import { WEAPONS, PEN } from './data.js';
 import { smokes } from './effects.js';
+import { meshBackend } from './sourcemap.js';
 
 /* ---- materials ---- */
 export const matFloor    = new THREE.MeshStandardMaterial({ color: 0x4a4742, roughness: .95 });
@@ -131,6 +132,7 @@ export function astar(start, goal) {
 
 /* reset everything the active map owns, ready for a fresh build */
 export function clearWorld() {
+  meshBackend.active = false; meshBackend.bvh = null; meshBackend.bounds = null;   // drop any imported mesh map
   for (const o of [...mapGroup.children]) {
     mapGroup.remove(o);
     if (o.traverse) o.traverse(n => { if (n.geometry && n.geometry.dispose) n.geometry.dispose(); if (n.material && n.material.dispose) n.material.dispose(); });
@@ -181,7 +183,8 @@ export function rayAABB(o, d, b) {
 }
 export function losClear(a, b, smokesBlock = true) {
   const o = a.clone(), d = b.clone().sub(a); const len = d.length(); if (len < 1) return true; d.normalize();
-  for (const w of WALLS) { const r = segAABB(o, d, len, w); if (r && r.thick > 0 && w.mat >= 0.4 && w.block) { return false; } }
+  if (meshBackend.active) { if (!meshBackend.losClear(a, b)) return false; }   // imported mesh map
+  else { for (const w of WALLS) { const r = segAABB(o, d, len, w); if (r && r.thick > 0 && w.mat >= 0.4 && w.block) return false; } }
   if (smokesBlock) for (const s of smokes) { if (s.alive) { const oc = s.pos.clone().sub(o); const proj = Math.max(0, Math.min(len, oc.dot(d))); const closest = o.clone().add(d.clone().multiplyScalar(proj)); if (closest.distanceTo(s.pos) < s.r) return false; } }
   return true;
 }
@@ -191,6 +194,7 @@ export function losClear(a, b, smokesBlock = true) {
    to a thickness cap; denser (higher-mat) and thicker surfaces cost more, and a
    surface too thick for the weapon (or the 4-surface cap) stops the bullet. */
 export function penetrate(o, target, wepKey) {
+  if (meshBackend.active) return meshBackend.penetrate(o, target, wepKey);   // imported mesh map
   const d = target.clone().sub(o); const len = d.length();
   if (len < 1) return { factor: 1, surfaces: 0, blocked: false };
   d.normalize();

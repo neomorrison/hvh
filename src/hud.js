@@ -95,7 +95,8 @@ export function drawRadar() {
 
 /* scoreboard */
 export function renderScoreboard() {
-  $("#sbTitle").textContent = `${GAME.customMap ? GAME.customMap.name : 'cs_office'} · MR12 · CT ${GAME.scoreCT} : ${GAME.scoreT} T · Round ${GAME.round}`;
+  const mapName = GAME.sourceMap || (GAME.customMap ? GAME.customMap.name : 'cs_office');
+  $("#sbTitle").textContent = `${mapName} · MR12 · CT ${GAME.scoreCT} : ${GAME.scoreT} T · Round ${GAME.round}`;
   for (const [side, el] of [[TEAM.CT, $("#sbCT")], [TEAM.T, $("#sbT")]]) {
     const list = agents.filter(a => a.team === side).sort((a, b) => b.kills - a.kills);
     el.innerHTML = `<div class="hd"><span></span><span>${side}</span><span>K</span><span>D</span><span>$</span><span>Weapon</span></div>` +

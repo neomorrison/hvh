@@ -22,6 +22,7 @@ import {
 import { toggleCheatMenu, buildCheatMenu, loadConfig, saveConfig, syncCheatUI } from './cheats.js';
 import { buildDefaultMap, buildCustomMap, blankEditorMap } from './map.js';
 import { openEditor, setDeployHandler, isEditorOpen } from './editor.js';
+import { loadSourceMap } from './sourcemap_load.js';
 
 const $ = s => document.querySelector(s);
 
@@ -235,7 +236,7 @@ function render() { renderer.render(scene, camera); }
 /* ============================== boot / deploy ============================== */
 function deploy(custom) {
   $("#startPanel").classList.remove("show");
-  GAME.customMap = custom || null;
+  GAME.customMap = custom || null; GAME.sourceMap = null;
   GAME.phase = "idle";
   if (custom) buildCustomMap(custom); else buildDefaultMap();
   GAME.round = 1; GAME.half = 1; GAME.scoreCT = 0; GAME.scoreT = 0; GAME.lossStreak = { CT: 0, T: 0 };
@@ -249,19 +250,45 @@ function deploy(custom) {
 }
 setDeployHandler(deploy);
 
+/* ---- import a real CS2 map (.glb geometry + spawns.json) for offline play ---- */
+async function loadAndPlaySource() {
+  const errEl = $("#importErr"); if (errEl) errEl.textContent = "";
+  const gf = $("#glbFile").files[0], sf = $("#spawnFile").files[0];
+  if (!gf) { if (errEl) errEl.textContent = "Choose a decompiled .glb map file first."; return; }
+  try {
+    const glb = await gf.arrayBuffer();
+    let spawns = { ctSpawns: [], tSpawns: [] };
+    if (sf) spawns = JSON.parse(await sf.text());
+    spawns.name = spawns.name || gf.name.replace(/\.[^.]+$/, '');
+    deploySource(glb, spawns);
+  } catch (e) { if (errEl) errEl.textContent = "Import failed: " + (e && e.message || e); else throw e; }
+}
+function deploySource(glb, spawns) {
+  $("#startPanel").classList.remove("show");
+  GAME.customMap = null; GAME.sourceMap = spawns.name || "imported"; GAME.phase = "idle";
+  const info = loadSourceMap(glb, spawns);
+  GAME.round = 1; GAME.half = 1; GAME.scoreCT = 0; GAME.scoreT = 0; GAME.lossStreak = { CT: 0, T: 0 };
+  GAME.humanTeam = TEAM.CT; GAME.ctIsHuman = true;
+  buildTeams(); loadConfig(); buildCheatMenu(); startRound();
+  renderer.domElement.requestPointerLock(); audio();
+  showHint(`Imported ${GAME.sourceMap}: ${info.triangles | 0} tris · ${info.navNodes} nav nodes`);
+  return info;
+}
+
 function boot() {
   buildCrosshair();
   $("#loadStat").textContent = "Ready.";
   const btn = $("#playBtn"); btn.disabled = false; btn.textContent = "DEPLOY";
   btn.onclick = () => deploy(null);
   const eb = $("#editBtn"); if (eb) eb.onclick = () => openEditor();
+  const lb = $("#loadMapBtn"); if (lb) lb.onclick = () => loadAndPlaySource();
 }
 
 /* debug/test surface */
 window.HVH = {
   get GAME() { return GAME; }, get agents() { return agents; }, get human() { return refs.human; },
   WEAPONS, ECON, computeDamage, WALLS, NODES, EDGES, segAABB, losClear, penetrate, camera, scene, renderer,
-  deploy,
+  deploy, deploySource,
   fastForward(secs) { const dt = 1 / 60; let t = 0; while (t < secs) { step(dt); t += dt; } return { phase: GAME.phase, score: [GAME.scoreCT, GAME.scoreT] }; },
   computeBloom(a) { return computeBloom(a || refs.human); },
   testGrenade() { refs.human.nades = { he: 1, flash: 1 }; equipGrenade(); const eq = refs.human.equippedNade; const before = nadeProjectiles.length; const ok = throwNade(refs.human, eq); return { equipped: eq, threw: ok, projectilesBefore: before, projectilesAfter: nadeProjectiles.length, remaining: refs.human.nades[eq] }; },

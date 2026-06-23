@@ -8,6 +8,7 @@ import {
   EYE_STAND, EYE_CROUCH, PLAYER_RADIUS, ECON, computeDamage,
 } from './data.js';
 import { WALLS, segAABB, rayAABB, penetrate, losClear, collideMove } from './world.js';
+import { meshBackend } from './sourcemap.js';
 import { hitboxes, hitboxCenter, eyePos, setViewmodel } from './agents.js';
 import { agents } from './state.js';
 import { addTracer, addImpact } from './effects.js';
@@ -46,7 +47,22 @@ export function moveAgent(a, dirXZ, dt, combat) {
   a.vel.y -= GRAVITY * dt;
   const wasOnGround = a.onGround;
   const descend = a.vel.y;
+  const prevX = a.pos.x, prevZ = a.pos.z;
   a.pos.x += a.vel.x * dt; a.pos.z += a.vel.z * dt; a.pos.y += a.vel.y * dt;
+  if (meshBackend.active) {
+    // imported mesh map: slide along real walls, follow the real (multi-level) floor
+    const bodyY = a.pos.y + (a.crouch ? 26 : 40);
+    const [nx, nz] = meshBackend.slideXZ(prevX, prevZ, a.pos.x, a.pos.z, bodyY, PLAYER_RADIUS);
+    a.pos.x = nx; a.pos.z = nz;
+    const g = meshBackend.groundHeight(a.pos.x, a.pos.z, a.pos.y);
+    if (g > -1e8 && a.pos.y <= g + 0.5) {
+      a.pos.y = g;
+      if (!wasOnGround) { const impact = Math.min(1, Math.abs(descend) / JUMP_VEL); a.landBloom = Math.max(a.landBloom || 0, LAND_INACC * (0.45 + impact * 0.9)); }
+      a.vel.y = 0; a.onGround = true;
+    } else a.onGround = false;
+    a.eye = (a.crouch ? EYE_CROUCH : EYE_STAND) + a.pos.y;
+    return;
+  }
   if (a.pos.y < 0) {
     a.pos.y = 0;
     if (!wasOnGround) {                                      // just landed → landing inaccuracy

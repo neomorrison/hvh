@@ -16,6 +16,7 @@ export const GAME = {
   lossStreak: { CT: 0, T: 0 }, timer: 0, freeze: 0, thirdPerson: false,
   hostages: [], rescued: 0, winner: null, roundResult: "",
   customMap: null,       // active custom map data, or null for cs_office
+  sourceMap: null,       // name of an imported CS2 .glb map, or null
 };
 
 export const FREEZE_TIME = 12, ROUND_TIME = 115, END_TIME = 5;

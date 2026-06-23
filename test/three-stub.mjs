@@ -4,6 +4,8 @@
    (Mesh/Material/Geometry/Lights/Renderer) are inert. */
 
 export const PCFSoftShadowMap = 1;
+export const DoubleSide = 2, FrontSide = 0, BackSide = 1;
+export class BufferAttribute { constructor(array, itemSize) { this.array = array; this.itemSize = itemSize; this.count = array ? array.length / itemSize : 0; } }
 
 export class Vector3 {
   constructor(x = 0, y = 0, z = 0) { this.x = x; this.y = y; this.z = z; }
@@ -77,7 +79,7 @@ export class MeshStandardMaterial extends Mat {}
 export class MeshBasicMaterial extends Mat {}
 export class LineBasicMaterial extends Mat {}
 
-class Geo { dispose() {} setFromPoints() { return this; } }
+class Geo { dispose() {} setFromPoints() { return this; } setAttribute() { return this; } setIndex() { return this; } computeVertexNormals() {} }
 export class BoxGeometry extends Geo { constructor(w, h, d) { super(); this.w = w; this.h = h; this.d = d; } }
 export class SphereGeometry extends Geo {}
 export class CylinderGeometry extends Geo {}

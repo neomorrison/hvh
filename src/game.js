@@ -9,6 +9,7 @@ import { spawnAgent, applyPersona, BOT_PERSONAS, recolorAgent, eyePos, hitboxCen
 import { giveWeapon, selectBest, switchTo, killAgent } from './combat.js';
 import { botBuy } from './ai.js';
 import { agents, refs, GAME, FREEZE_TIME, ROUND_TIME, END_TIME } from './state.js';
+import { meshBackend } from './sourcemap.js';
 import { clearEffects, addExplosion, smokes, fires, nadeProjectiles } from './effects.js';
 import { centerMessage, showHint, updateAllHUD, updateHUDWeapons, addKillFeedText, damageFlash, doFlash, playBeep } from './hud.js';
 
@@ -50,9 +51,11 @@ export function startRound() {
 export function resetAgentForRound(a, spawn) {
   const survived = a.alive;
   if (!survived) { a.weapons = {}; a.slotPrimary = null; a.slotSecondary = null; a.armor = 0; a.helmet = false; a.nades = {}; a.curNade = null; a.equippedNade = null; a._wmKey = null; }
-  a.alive = true; a.hp = 100; a.pos.copy(spawn); a.vel.set(0, 0, 0); a.pos.y = 0; a.eye = EYE_STAND;
+  a.alive = true; a.hp = 100; a.pos.copy(spawn); a.vel.set(0, 0, 0); a.pos.y = spawn.y || 0;
+  if (meshBackend.active) { const g = meshBackend.groundHeight(a.pos.x, a.pos.z, a.pos.y + 40); if (g > -1e8) a.pos.y = g; }   // sit on the real floor
+  a.eye = EYE_STAND + a.pos.y;
   a.crouch = false; a.scoped = false; a.reloadT = 0; a.fireCd = 0; a.carrying = null; a.flashT = 0; a.hitFlash = 0;
-  a.yaw = a.team === TEAM.CT ? -Math.PI / 2 : Math.PI / 2; a.pitch = 0; a.realYaw = a.yaw;
+  a.yaw = (spawn.yaw != null) ? spawn.yaw : (a.team === TEAM.CT ? -Math.PI / 2 : Math.PI / 2); a.pitch = 0; a.realYaw = a.yaw;
   a.equippedNade = null; a.firePenalty = 0; a.hurtBloom = 0; a.landBloom = 0; a.onGround = true;
   a.boughtThisBuy = {};                                    // reset same-buy sellback tracking
   a.body.g.visible = true;
