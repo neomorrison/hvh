@@ -3,7 +3,7 @@
    path on both cs_office and any custom (grid-nav) level.                  */
 import * as THREE from 'three';
 import { WEAPONS, TEAM, JUMP_VEL } from './data.js';
-import { NODES, RESCUE_ZONES, MAP_BOUNDS, astar, nearestNode, losClear } from './world.js';
+import { NODES, EDGES, RESCUE_ZONES, MAP_BOUNDS, astar, nearestNode, losClear } from './world.js';
 import { hitboxCenter, eyePos } from './agents.js';
 import { agents } from './state.js';
 import { aimbotFire, moveAgent, meleeAttack, visibleTo, startReload, giveWeapon, hasAnyAmmo } from './combat.js';
@@ -48,10 +48,21 @@ function botMove(a, dir, dt, combat) {
   if (d.lengthSq() > 1e-4) d.normalize();
   const before = a.pos.clone();
   moveAgent(a, d, dt, combat);
-  if (dir.lengthSq() > 1e-4 && a.pos.distanceTo(before) < dt * 30) {
+  // "stuck" = not advancing toward the goal direction — catches a bot sliding sideways along a wall
+  const dl = Math.hypot(dir.x, dir.z) || 1;
+  const progress = ((a.pos.x - before.x) * dir.x + (a.pos.z - before.z) * dir.z) / dl;
+  if (dir.lengthSq() > 1e-4 && progress < dt * 18) {
     a.aiStuck = (a.aiStuck || 0) + dt;
     if (a.aiStuck > 0.3 && a.onGround && a.aiState !== "fight") a.vel.y = JUMP_VEL;   // hop a ledge while roaming (not mid-fight — jumping ruins aim)
-    if (a.aiStuck > 0.8 && a.aiState !== "fight") { a.aiPath = []; a.aiTimer = 0; a.yaw += (Math.random() - 0.5) * 1.2; a.aiStuck = 0; }
+    if (a.aiStuck > 0.7 && a.aiState !== "fight") {
+      // can't traverse this edge (a wall the nav wrongly bridged) — prune it so A* routes
+      // around it (e.g. through the real doorway). Bots collectively self-heal the nav graph.
+      if (a.aiPath && a.aiPath.length) {
+        const cur = nearestNode(a.pos), nxt = a.aiPath[0];
+        if (cur !== nxt) { if (EDGES[cur]) EDGES[cur] = EDGES[cur].filter(e => e !== nxt); if (EDGES[nxt]) EDGES[nxt] = EDGES[nxt].filter(e => e !== cur); }
+      }
+      a.aiPath = []; a.aiTimer = 0; a.yaw += (Math.random() - 0.5) * 1.5; a.aiStuck = 0;
+    }
   } else a.aiStuck = 0;
 }
 
@@ -128,7 +139,8 @@ export function pickGoal(a) {
   let goalNode;
   if (a.team === TEAM.CT) {
     if (a.carrying && RESCUE_ZONES.length) goalNode = nearestNode(new THREE.Vector3(RESCUE_ZONES[0].x, 0, RESCUE_ZONES[0].z));
-    else { const h = liveHostages()[0]; goalNode = h ? nearestNode(h.pos) : centerNode(); }
+    // spread CT across the different hostages + some roaming, so they don't all funnel into one corner
+    else { const hs = liveHostages(); goalNode = (hs.length && Math.random() < 0.6) ? nearestNode(hs[(Math.random() * hs.length) | 0].pos) : randomNodeId(); }
   } else {
     const h = liveHostages()[0];
     goalNode = (h && Math.random() < 0.5) ? nearestNode(h.pos) : randomNodeId();   // spread T across the map

@@ -142,6 +142,7 @@ export function astar(start, goal) {
 /* reset everything the active map owns, ready for a fresh build */
 export function clearWorld() {
   meshBackend.active = false; meshBackend.bvh = null; meshBackend.bounds = null;   // drop any imported mesh map
+  scene.background = null; scene.fog = null;                                       // drop any imported-map sky/fog
   for (const o of [...mapGroup.children]) {
     mapGroup.remove(o);
     if (o.traverse) o.traverse(n => { if (n.geometry && n.geometry.dispose) n.geometry.dispose(); if (n.material && n.material.dispose) n.material.dispose(); });
