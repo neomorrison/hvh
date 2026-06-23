@@ -24,6 +24,7 @@ import { buildDefaultMap, buildCustomMap, blankEditorMap } from './map.js';
 import { openEditor, setDeployHandler, isEditorOpen } from './editor.js';
 import { loadSourceMap } from './sourcemap_load.js';
 import { meshBackend } from './sourcemap.js';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
 const $ = s => document.querySelector(s);
 
@@ -277,10 +278,10 @@ async function loadAndPlaySource() {
     deploySource(glb, spawns);
   } catch (e) { if (errEl) errEl.textContent = "Import failed: " + (e && e.message || e); else throw e; }
 }
-function deploySource(glb, spawns) {
+function deploySource(glb, spawns, texturedScene) {
   $("#startPanel").classList.remove("show");
   GAME.customMap = null; GAME.sourceMap = spawns.name || "imported"; GAME.phase = "idle";
-  const info = loadSourceMap(glb, spawns);
+  const info = loadSourceMap(glb, spawns, texturedScene);
   GAME.round = 1; GAME.half = 1; GAME.scoreCT = 0; GAME.scoreT = 0; GAME.lossStreak = { CT: 0, T: 0 };
   GAME.humanTeam = TEAM.CT; GAME.ctIsHuman = true;
   buildTeams(); loadConfig(); buildCheatMenu(); startRound();
@@ -299,13 +300,24 @@ function preloadMainMap() {
   ]);
   return mainMapAssets;
 }
+// Load the user's own textured map (./maps/cs_office.tex.glb) if they've placed one — never
+// bundled (it's Valve art); see tools/TEXTURES.md to generate it from your CS2 install.
+// Returns the parsed scene, or null to fall back to the procedural look.
+async function loadTexturedMap(url) {
+  try {
+    const r = await fetch(url); if (!r.ok) return null;
+    const buf = await r.arrayBuffer();
+    return await new Promise(res => new GLTFLoader().parse(buf, '', g => res(g.scene), () => res(null)));
+  } catch (e) { return null; }
+}
 async function deployMainMap() {
   const ls = $("#loadStat");
   try {
     if (ls) ls.textContent = "Loading cs_office…";
     const [glb, spawns] = await (mainMapAssets || preloadMainMap());
     spawns.name = spawns.name || MAIN_MAP.name;
-    deploySource(glb, spawns);
+    const tex = await loadTexturedMap("./maps/cs_office.tex.glb");   // optional, user-supplied real textures
+    deploySource(glb, spawns, tex);
   } catch (e) {                                          // bundled map unreachable → procedural blockout
     console.warn("cs_office mesh map unavailable, using procedural layout:", e);
     if (ls) ls.textContent = "";
