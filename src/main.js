@@ -23,6 +23,7 @@ import { toggleCheatMenu, buildCheatMenu, loadConfig, saveConfig, syncCheatUI } 
 import { buildDefaultMap, buildCustomMap, blankEditorMap } from './map.js';
 import { openEditor, setDeployHandler, isEditorOpen } from './editor.js';
 import { loadSourceMap } from './sourcemap_load.js';
+import { meshBackend } from './sourcemap.js';
 
 const $ = s => document.querySelector(s);
 
@@ -219,9 +220,18 @@ function updateCamera() {
     const fov = (scopedNow && !tp) ? 40 : 74;
     if (Math.abs(camera.fov - fov) > 0.5) { camera.fov += (fov - camera.fov) * 0.4; camera.updateProjectionMatrix(); }
     if (tp) {
-      const fwd = new THREE.Vector3(-Math.sin(human.yaw), 0, -Math.cos(human.yaw));
-      const dist = 130, back = fwd.clone().multiplyScalar(-dist);
-      camera.position.set(human.pos.x + back.x, human.eye + 30, human.pos.z + back.z);
+      // pull the camera in if a wall/prop is between it and the player (no clipping through walls)
+      const dist = 130, ex = human.pos.x, ey = human.eye, ez = human.pos.z;
+      const vx = Math.sin(human.yaw) * dist, vy = 30, vz = Math.cos(human.yaw) * dist;
+      const vl = Math.hypot(vx, vy, vz), ux = vx / vl, uy = vy / vl, uz = vz / vl;
+      let allow = vl;
+      if (meshBackend.active && meshBackend.bvh) {
+        const h = meshBackend.bvh.raycast(ex, ey, ez, ux, uy, uz, vl); if (h) allow = Math.max(18, h.t - 12);
+      } else {
+        const o = new THREE.Vector3(ex, ey, ez), d = new THREE.Vector3(ux, uy, uz);
+        for (const wl of WALLS) { if (!wl.block) continue; const r = segAABB(o, d, vl, wl); if (r && r.enter > 1 && r.enter < allow) allow = Math.max(18, r.enter - 12); }
+      }
+      camera.position.set(ex + ux * allow, ey + uy * allow, ez + uz * allow);
       camera.rotation.set(human.pitch, human.yaw, 0, 'YXZ');
       if (vm.current) vm.current.visible = false;
     } else {

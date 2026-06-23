@@ -12,14 +12,18 @@ function concat(arrays) { let n = 0; for (const a of arrays) n += a.length; cons
 
 export function loadSourceMap(glbBuffer, spawns) {
   clearWorld();                                            // also deactivates any prior mesh backend
-  // 'windows' mesh renders as reflective glass; everything else is the world. Collide against both.
+  // 'windows' = reflective glass (visual+collision); 'clip' = invisible playable-boundary hull
+  // (collision only, keeps players inside the real map); everything else is the world.
   const groups = parseGLBMeshes(glbBuffer);
-  const worldTris = concat(groups.filter(g => g.name !== 'windows').map(g => g.tris));
+  const worldTris = concat(groups.filter(g => g.name !== 'windows' && g.name !== 'clip').map(g => g.tris));
   const windowTris = (groups.find(g => g.name === 'windows') || {}).tris || new Float32Array(0);
+  const clipTris = (groups.find(g => g.name === 'clip') || {}).tris || new Float32Array(0);
   if (!worldTris.length) throw new Error('No triangles found in the .glb (is it a map export?)');
-  const allTris = windowTris.length ? concat([worldTris, windowTris]) : worldTris;
-  const bvh = new TriBVH(allTris);
+  // floors / LOS / bullets / nav use world+windows; the clip hull is a MOVEMENT-only boundary
+  // (Source player_clip semantics) so it keeps players in without blocking sight, fire or bot nav.
+  const bvh = new TriBVH(windowTris.length ? concat([worldTris, windowTris]) : worldTris);
   meshBackend.bvh = bvh; meshBackend.bounds = bvh.bounds; meshBackend.active = true;
+  meshBackend.clipBvh = clipTris.length ? new TriBVH(clipTris) : null;
   const b = bvh.bounds;
 
   // world visual: vertex tint (floor/wall/ceiling) × a box-unwrapped procedural detail texture
@@ -61,7 +65,7 @@ export function loadSourceMap(glbBuffer, spawns) {
 
   generateMeshNav();
   addCeilingLights();                                      // warm point lights under the office ceilings (uses nav nodes)
-  return { triangles: allTris.length / 9, bounds: b, ctSpawns: CT_SPAWNS.length, tSpawns: T_SPAWNS.length, navNodes: NODES.length };
+  return { triangles: (worldTris.length + windowTris.length) / 9, bounds: b, ctSpawns: CT_SPAWNS.length, tSpawns: T_SPAWNS.length, navNodes: NODES.length };
 }
 
 // box-unwrap UVs per vertex (project onto the plane of the face's dominant axis) so a

@@ -137,13 +137,18 @@ function randomNodeId() { return NODES.length ? NODES[Math.floor(Math.random() *
 function centerNode() { const cx = (MAP_BOUNDS.minX + MAP_BOUNDS.maxX) / 2, cz = (MAP_BOUNDS.minZ + MAP_BOUNDS.maxZ) / 2; return nearestNode(new THREE.Vector3(cx, 0, cz)); }
 export function pickGoal(a) {
   let goalNode;
-  if (a.team === TEAM.CT) {
+  const enemies = agents.filter(t => t.alive && t.team !== a.team);
+  // hvh deathmatch: mostly hunt the nearest enemy so the teams actually meet and trade.
+  // Repathing toward the nearest enemy each cycle is self-reinforcing — it pulls them together.
+  if (enemies.length && Math.random() < 0.7) {
+    let near = enemies[0], nd = 1e9; for (const e of enemies) { const d = a.pos.distanceToSquared(e.pos); if (d < nd) { nd = d; near = e; } }
+    goalNode = nearestNode(near.pos);
+  } else if (a.team === TEAM.CT) {
     if (a.carrying && RESCUE_ZONES.length) goalNode = nearestNode(new THREE.Vector3(RESCUE_ZONES[0].x, 0, RESCUE_ZONES[0].z));
-    // spread CT across the different hostages + some roaming, so they don't all funnel into one corner
-    else { const hs = liveHostages(); goalNode = (hs.length && Math.random() < 0.6) ? nearestNode(hs[(Math.random() * hs.length) | 0].pos) : randomNodeId(); }
+    else { const hs = liveHostages(); goalNode = hs.length ? nearestNode(hs[(Math.random() * hs.length) | 0].pos) : randomNodeId(); }
   } else {
     const h = liveHostages()[0];
-    goalNode = (h && Math.random() < 0.5) ? nearestNode(h.pos) : randomNodeId();   // spread T across the map
+    goalNode = (h && Math.random() < 0.5) ? nearestNode(h.pos) : randomNodeId();
   }
   a.aiPath = astar(nearestNode(a.pos), goalNode);
 }

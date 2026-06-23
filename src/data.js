@@ -63,10 +63,11 @@ export const EYE_STAND = 64, EYE_CROUCH = 46, PLAYER_RADIUS = 16, GRAVITY = 800,
 
 // bullet penetration (autowall): weapon penPct doubles as penetration power.
 export const PEN = {
-  maxSurfaces: 4,       // CS2 stops a bullet after a few surfaces
-  unitsPerPower: 95,    // power(0..1) * this = max EFFECTIVE thickness one surface may be
-  perSurfaceLoss: 0.10, // flat damage loss for crossing any surface
-  thickLossK: 0.55,     // extra loss scaled by how thick the surface is vs the cap
+  maxSurfaces: 4,        // CS2 stops a bullet after a few surfaces
+  unitsPerPower: 48,     // power(0..1) * this = max EFFECTIVE thickness one surface may be
+  loneThickness: 20,     // a single-sided (non-manifold) wall face is treated this thick
+  perSurfaceLoss: 0.10,  // flat damage loss for crossing any surface
+  thickLossK: 0.55,      // extra loss scaled by how thick the surface is vs the cap
 };
 
 /* damage model — returns {damage, armor} */
