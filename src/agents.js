@@ -157,18 +157,18 @@ export function spawnAgent(team, isHuman, name) {
 }
 
 export function hitboxes(a) {
-  const s = a.crouch ? 0.72 : 1;
+  const s = a.crouch ? 0.72 : 1, fy = a.pos.y;            // fy = feet height (0 on flat maps; floor Y on mesh maps / when airborne)
   const x = a.pos.x, z = a.pos.z;
   return [
-    { group: "head", minX: x - 7, maxX: x + 7, minY: (60) * s, maxY: (73) * s, minZ: z - 7, maxZ: z + 7 },
-    { group: "chest", minX: x - 11, maxX: x + 11, minY: (46) * s, maxY: (60) * s, minZ: z - 7, maxZ: z + 7 },
-    { group: "stomach", minX: x - 10, maxX: x + 10, minY: (34) * s, maxY: (46) * s, minZ: z - 6, maxZ: z + 6 },
-    { group: "legs", minX: x - 9, maxX: x + 9, minY: 0, maxY: (34) * s, minZ: z - 6, maxZ: z + 6 },
+    { group: "head", minX: x - 7, maxX: x + 7, minY: fy + 60 * s, maxY: fy + 73 * s, minZ: z - 7, maxZ: z + 7 },
+    { group: "chest", minX: x - 11, maxX: x + 11, minY: fy + 46 * s, maxY: fy + 60 * s, minZ: z - 7, maxZ: z + 7 },
+    { group: "stomach", minX: x - 10, maxX: x + 10, minY: fy + 34 * s, maxY: fy + 46 * s, minZ: z - 6, maxZ: z + 6 },
+    { group: "legs", minX: x - 9, maxX: x + 9, minY: fy, maxY: fy + 34 * s, minZ: z - 6, maxZ: z + 6 },
   ];
 }
 export function hitboxCenter(a, group) {
   const s = a.crouch ? 0.72 : 1;
-  const y = { head: 66, chest: 53, stomach: 40, legs: 17 }[group] * s;
+  const y = a.pos.y + { head: 66, chest: 53, stomach: 40, legs: 17 }[group] * s;
   return new THREE.Vector3(a.pos.x, y, a.pos.z);
 }
 export function eyePos(a) { return new THREE.Vector3(a.pos.x, a.eye, a.pos.z); }

@@ -26,6 +26,7 @@ python3 -m http.server 8000
 - **HvH bots** with unique handles & playstyles, each running aimbot, anti-aim, resolver, autowall, body-aim, and auto-knife when out of ammo.
 - **Cheat menu (press `I`)** — aimbot (FOV, hitchance, silent, triggerbot, auto-stop, auto-scope, auto-knife, auto-revolver), autowall, resolver, anti-aim, backtrack, and wallhack/ESP. Min-damage, autowall-min-damage and hit-chance are now strictly respected (the aimbot won't fire unless a hitbox actually meets the threshold). Config saves to your browser.
 - **🛠 Map Builder** — a top-down level editor (button on the start screen). Draw/move/delete walls, drop props (desks, cabinets, cars, vans, crates, cubicles…), place CT/T spawns, hostages and rescue zones, then **Play** to test. Bot navigation is auto-generated for any layout. Maps save to your browser and export/import as JSON.
+- **🗺️ Import real CS2 maps (offline)** — decompile a map's geometry to `.glb` with Source2Viewer and load it (plus a spawns `.json`) from the start screen. The game runs on the **exact mesh** — mesh line-of-sight, autowall/penetration, multi-level floors and wall collision — with auto-generated bot nav and your real spawns. Textures are ignored; nothing from Valve is bundled (you load your own files). See [`tools/IMPORT.md`](tools/IMPORT.md).
 
 ## Controls
 

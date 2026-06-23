@@ -100,6 +100,34 @@ try {
     log('✓ custom map simulated ~8s — phase:', HVH.GAME.phase, 'round:', HVH.GAME.round);
   }
 
+  // --- imported CS2 mesh map: build a tiny synthetic .glb, deploy, simulate ---
+  if (HVH.deploySource) {
+    const verts = [];
+    const tri = (a, b, c) => verts.push(...a, ...b, ...c);
+    const quad = (p0, p1, p2, p3) => { tri(p0, p1, p2); tri(p0, p2, p3); };
+    const boxg = (x0, x1, y0, y1, z0, z1) => {
+      const c = [[x0, y0, z0], [x1, y0, z0], [x1, y1, z0], [x0, y1, z0], [x0, y0, z1], [x1, y0, z1], [x1, y1, z1], [x0, y1, z1]];
+      quad(c[0], c[1], c[2], c[3]); quad(c[4], c[5], c[6], c[7]); quad(c[0], c[3], c[7], c[4]); quad(c[1], c[2], c[6], c[5]); quad(c[0], c[1], c[5], c[4]); quad(c[3], c[2], c[6], c[7]);
+    };
+    quad([-900, 0, -900], [900, 0, -900], [900, 0, 900], [-900, 0, 900]);   // floor
+    boxg(-300, -286, 0, 200, -600, 600);   // a wall
+    boxg(400, 700, 0, 120, -200, 200);     // a raised platform (top y=120)
+    const f32 = new Float32Array(verts); const b64 = Buffer.from(f32.buffer).toString('base64');
+    const gltf = { asset: { version: "2.0" }, scene: 0, scenes: [{ nodes: [0] }], nodes: [{ mesh: 0 }], meshes: [{ primitives: [{ attributes: { POSITION: 0 } }] }], accessors: [{ bufferView: 0, componentType: 5126, count: f32.length / 3, type: "VEC3" }], bufferViews: [{ buffer: 0, byteOffset: 0, byteLength: f32.byteLength }], buffers: [{ byteLength: f32.byteLength, uri: "data:base64," + b64 }] };
+    const glb = new TextEncoder().encode(JSON.stringify(gltf)).buffer;
+    const spawns = { name: 'synth', ctSpawns: [{ x: -700, y: 0, z: 0 }, { x: -700, y: 0, z: 100 }], tSpawns: [{ x: 550, y: 120, z: 0 }, { x: 700, y: 0, z: 400 }] };
+    const info = HVH.deploySource(glb, spawns);
+    log('  imported mesh map: tris=', info.triangles | 0, 'navNodes=', info.navNodes, 'phase=', HVH.GAME.phase);
+    if (!(info.navNodes > 4)) { failures++; log('✗ mesh nav should produce nodes'); }
+    // an agent spawned on the platform should sit at its height, not y=0
+    const onPlat = HVH.agents.find(a => a.pos.x > 380 && a.pos.x < 720);
+    if (onPlat) log('  platform spawn feet Y =', onPlat.pos.y.toFixed(1), '(expected ~120)');
+    for (let i = 0; i < 14; i++) HVH.fastForward(1);
+    const fell = HVH.agents.filter(a => a.alive && a.pos.y < -50).length;
+    log('✓ mesh map simulated ~14s — phase:', HVH.GAME.phase, 'agents below floor:', fell);
+    if (fell > 0) { failures++; log('✗ agents fell through the mesh floor'); }
+  }
+
   if (failures === 0) { log('\n✅ SMOKE TEST PASSED'); process.exit(0); }
   else { log('\n❌ SMOKE TEST FAILED with', failures, 'assertion failure(s)'); process.exit(1); }
 } catch (e) {

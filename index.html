@@ -306,7 +306,16 @@
     <button id="playBtn" disabled>Loading…</button>
     <button id="editBtn">🛠 Map Builder</button>
   </div>
-  <div class="legal">Original fan recreation. Map layout, economy &amp; weapon stats reproduce Counter-Strike 2 mechanics; all geometry, art and code are original — no Valve assets are used. For educational/entertainment purposes.</div>
+  <div id="importRow" style="pointer-events:auto; margin-top:14px; padding-top:12px; border-top:1px solid #2a3340; font-size:12px; color:#9aa4b2;">
+    <div style="margin-bottom:6px;">🗺️ <b>Import a real CS2 map (offline)</b> — decompile the map to <code>.glb</code> with Source2Viewer, then load it here with an optional spawns <code>.json</code>. See <code>tools/IMPORT.md</code>.</div>
+    <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; justify-content:center;">
+      <label>Geometry: <input type="file" id="glbFile" accept=".glb,.gltf"></label>
+      <label>Spawns: <input type="file" id="spawnFile" accept=".json,application/json"></label>
+      <button id="loadMapBtn" class="edbtn act">Load &amp; Play</button>
+    </div>
+    <div id="importErr" style="color:#ff6b6b; margin-top:6px; min-height:14px;"></div>
+  </div>
+  <div class="legal">Original fan recreation. Map layout, economy &amp; weapon stats reproduce Counter-Strike 2 mechanics; all original geometry, art and code are original — no Valve assets are bundled. Imported maps load from your own files at runtime. For educational/entertainment purposes.</div>
 </div></div>
 
 <script type="importmap">
