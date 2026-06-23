@@ -47,7 +47,7 @@ export function moveAgent(a, dirXZ, dt, combat) {
   a.vel.y -= GRAVITY * dt;
   const wasOnGround = a.onGround;
   const descend = a.vel.y;
-  const prevX = a.pos.x, prevZ = a.pos.z;
+  const prevX = a.pos.x, prevZ = a.pos.z, prevY = a.pos.y;
   a.pos.x += a.vel.x * dt; a.pos.z += a.vel.z * dt; a.pos.y += a.vel.y * dt;
   if (meshBackend.active) {
     // recover anything that fell out of the world (through a hole / off an edge) — teleport to a team spawn
@@ -74,6 +74,14 @@ export function moveAgent(a, dirXZ, dt, combat) {
     cx = Math.min(Math.max(cx, MAP_BOUNDS.minX + PLAYER_RADIUS), MAP_BOUNDS.maxX - PLAYER_RADIUS);
     cz = Math.min(Math.max(cz, MAP_BOUNDS.minZ + PLAYER_RADIUS), MAP_BOUNDS.maxZ - PLAYER_RADIUS);
     a.pos.x = cx; a.pos.z = cz;
+    // ceiling: when rising (a jump), stop the head at the first solid/clip surface above. Nothing
+    // else constrains upward motion, so without this a jump clips straight through a low ceiling.
+    if (a.vel.y > 0) {
+      const ho = a.crouch ? 44 : 66, rise = a.vel.y * dt;
+      let ch = meshBackend.bvh.raycast(a.pos.x, prevY + ho, a.pos.z, 0, 1, 0, rise + 2);
+      if (meshBackend.clipBvh) { const c = meshBackend.clipBvh.raycast(a.pos.x, prevY + ho, a.pos.z, 0, 1, 0, rise + 2); if (c && (!ch || c.t < ch.t)) ch = c; }
+      if (ch) { a.pos.y = prevY + Math.max(0, ch.t - 0.5); a.vel.y = 0; }
+    }
     let g = meshBackend.groundHeight(a.pos.x, a.pos.z, a.pos.y);
     let snap = g > -1e8 && a.pos.y <= g + 0.5;                  // landing / step-up onto a ≤18u ledge
     if (!snap && wasOnGround && a.vel.y <= 0) {                 // grounded last frame, not jumping → stick to a nearby

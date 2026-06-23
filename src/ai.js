@@ -27,7 +27,7 @@ export function botBuy(a) {
   if (a.money >= 200 && Math.random() < 0.3) { a.nades.flash = (a.nades.flash || 0) + 1; a.money -= 200; }
 }
 
-const SEP_RADIUS = 90;   // bots keep this much space from same-team bots to avoid bunching
+const SEP_RADIUS = 56;   // ~one node-spacing; tight enough that spawn crowds don't shove each other into walls
 
 function separation(a) {
   let sx = 0, sz = 0, n = 0;
@@ -44,7 +44,7 @@ function separation(a) {
 function botMove(a, dir, dt, combat) {
   const sep = separation(a);
   const d = dir.clone().setY(0);
-  if (sep) d.add(sep.multiplyScalar(0.6));
+  if (sep) d.add(sep.multiplyScalar(0.35));   // weaker separation: it must nudge, not override the goal into a wall
   if (d.lengthSq() > 1e-4) d.normalize();
   const before = a.pos.clone();
   moveAgent(a, d, dt, combat);
@@ -72,7 +72,7 @@ function followPath(a, dt, combat) {
   if (!a.aiPath.length || !NODES[a.aiPath[0]]) { a.aiPath = []; return; }
   while (a.aiPath.length > 1 && NODES[a.aiPath[1]] && losClear(eyePos(a), NODES[a.aiPath[1]].p)) a.aiPath.shift();
   const to = NODES[a.aiPath[0]].p.clone().sub(a.pos); to.y = 0;
-  if (to.length() < 72) { a.aiPath.shift(); return; }
+  if (to.length() < 44) { a.aiPath.shift(); return; }   // tighter arrival to match the denser nav grid
   a.yaw = Math.atan2(-to.x, -to.z);
   botMove(a, to.normalize(), dt, combat);
 }
@@ -140,7 +140,7 @@ export function pickGoal(a) {
   const enemies = agents.filter(t => t.alive && t.team !== a.team);
   // hvh deathmatch: mostly hunt the nearest enemy so the teams actually meet and trade.
   // Repathing toward the nearest enemy each cycle is self-reinforcing — it pulls them together.
-  if (enemies.length && Math.random() < 0.7) {
+  if (enemies.length && Math.random() < 0.45) {   // fewer bots funnel the same doorway at once; the rest fan out to objectives
     let near = enemies[0], nd = 1e9; for (const e of enemies) { const d = a.pos.distanceToSquared(e.pos); if (d < nd) { nd = d; near = e; } }
     goalNode = nearestNode(near.pos);
   } else if (a.team === TEAM.CT) {
