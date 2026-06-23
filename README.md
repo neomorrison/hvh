@@ -69,6 +69,6 @@ node --import ./test/register.mjs ./test/smoke.mjs
 
 ## Notes
 
-Original fan project for educational/entertainment purposes. Economy, weapon stats, and gameplay reproduce Counter-Strike 2 *mechanics*; the code is original.
+Original fan project for personal/educational use. Economy, weapon stats, and gameplay reproduce Counter-Strike 2 *mechanics*; the engine code is original.
 
-The bundled `cs_office` map is imported geometry decompiled from CS2; for a textured render you can generate `maps/cs_office.tex.glb` from your own CS2 install (it's git-ignored and loaded at runtime — see [tools/TEXTURES.md](tools/TEXTURES.md)). Map geometry and textures are Valve's IP — keep them to your own local/private use; don't redistribute them.
+The `cs_office` map is decompiled/extracted from CS2: `maps/cs_office.glb` is the geometry and `maps/cs_office.tex.glb` is the textured render (loaded at runtime; regenerate with [tools/TEXTURES.md](tools/TEXTURES.md)). **These map/texture assets are Valve's intellectual property, included here only for this personal/private project — not licensed for redistribution.**
