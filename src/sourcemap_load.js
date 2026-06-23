@@ -124,12 +124,35 @@ function makeDetailTexture() {
   return tex;
 }
 
-// night sky background + fog + moonlight sun + hemisphere fill
+// dusk sky: gradient sky dome + a visible sun glow + a soft cool hemisphere fill. The key
+// (shadow-casting) light is core.js `sun`; here we add the sky itself — previously just a flat
+// dark colour, which is why the map looked like it had no sky or sun.
 function setupSky(b) {
-  scene.background = new THREE.Color(0x121821);
-  scene.fog = new THREE.Fog(0x121821, 1400, 7000);
-  addMapObject(new THREE.HemisphereLight(0x9fb4d6, 0x1a1d24, 0.6));
-  const sun = new THREE.DirectionalLight(0xbcd0ff, 0.65); sun.position.set(b.max[0] + 800, b.max[1] + 1800, b.min[2] - 800); addMapObject(sun);
+  const horizon = 0x243349;
+  scene.background = new THREE.Color(horizon);
+  scene.fog = new THREE.Fog(horizon, 2600, 11000);                 // distant buildings melt into the dusk haze; sky dome stays visible
+  addMapObject(new THREE.HemisphereLight(0x9fb4d6, 0x20242c, 0.4));  // soft sky fill on top of the core sun
+
+  // gradient dome (inverted sphere). Guarded so the headless THREE stub can skip it.
+  if (typeof THREE.ShaderMaterial === 'function' && typeof THREE.SphereGeometry === 'function' && typeof THREE.Mesh === 'function') {
+    const mat = new THREE.ShaderMaterial({
+      side: THREE.BackSide, depthWrite: false, fog: false,
+      uniforms: { top: { value: new THREE.Color(0x0b1430) }, mid: { value: new THREE.Color(horizon) }, bot: { value: new THREE.Color(0x0e131b) } },
+      vertexShader: 'varying vec3 vP; void main(){ vP = position; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }',
+      fragmentShader: 'varying vec3 vP; uniform vec3 top; uniform vec3 mid; uniform vec3 bot; void main(){ float h = normalize(vP).y; vec3 c = h > 0.0 ? mix(mid, top, pow(h,0.55)) : mix(mid, bot, pow(-h,0.5)); gl_FragColor = vec4(c,1.0); }'
+    });
+    const dome = new THREE.Mesh(new THREE.SphereGeometry(8000, 32, 16), mat); dome.frustumCulled = false; dome.renderOrder = -10; addMapObject(dome);
+  }
+
+  // visible sun glow, aligned with the core key-light direction (core.js sun.position).
+  if (typeof THREE.Sprite === 'function' && typeof THREE.CanvasTexture === 'function' && typeof document !== 'undefined') {
+    const cv = document.createElement('canvas'); cv.width = cv.height = 128;
+    const ctx = cv.getContext('2d'); const g = ctx.createRadialGradient(64, 64, 0, 64, 64, 64);
+    g.addColorStop(0, 'rgba(255,246,222,1)'); g.addColorStop(0.22, 'rgba(255,228,180,0.8)'); g.addColorStop(1, 'rgba(255,210,150,0)');
+    ctx.fillStyle = g; ctx.fillRect(0, 0, 128, 128);
+    const spr = new THREE.Sprite(new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(cv), transparent: true, depthWrite: false, fog: false, blending: THREE.AdditiveBlending }));
+    spr.position.copy(new THREE.Vector3(-1200, 2200, 800).normalize().multiplyScalar(7000)); spr.scale.setScalar(1700); addMapObject(spr);
+  }
 }
 
 // warm point lights up near the office ceilings — placed on spaced nav nodes (guaranteed on
@@ -186,48 +209,99 @@ function clusterWindowPanes(tris) {
   return [...groups.values()];
 }
 
-/* sample a grid of standable floor points and connect walkable neighbours */
+/* sample a grid of standable floor points and connect walkable neighbours.
+   The collision is now Valve's watertight physics hull, which INCLUDES ceilings/roofs — so a
+   single top-down ray would seat nodes on the roof and miss interior floors under a ceiling.
+   We therefore sample EVERY standable floor level per column (multi-storey), connect walkable
+   neighbours, then PRUNE to what's actually reachable from the spawns — which deletes the roof
+   and any out-of-bounds shelf the player can never stand on. */
 export function generateMeshNav() {
   NODES.length = 0; for (const k in EDGES) delete EDGES[k];
   const { minX, maxX, minZ, maxZ } = MAP_BOUNDS; const top = meshBackend.bounds.max[1] + 60;
-  const step = Math.max(96, Math.min(180, Math.round((maxX - minX) / 40)));   // fine enough to seat nodes in doorways
-  const cells = {}; let id = 0;
+  const step = Math.max(56, Math.min(120, Math.round((maxX - minX) / 64)));   // dense enough for spawn clusters + doorways
+  const cells = {}; let id = 0;                                               // "gx,gz" -> [nodes stacked by storey]
+  const addNode = (x, z, y, gx, gz) => { const n = { id: id++, p: new THREE.Vector3(x, y, z), gx, gz, y }; NODES.push(n); EDGES[n.id] = []; (cells[gx + ',' + gz] || (cells[gx + ',' + gz] = [])).push(n); return n; };
+
+  // all standable floors in a column: walk a down-ray, keep each UP-facing surface with headroom
+  const sampleColumn = (x, z, gx, gz) => {
+    let y = top, guard = 0, found = 0;
+    while (guard++ < 12) {
+      const h = meshBackend.bvh.raycast(x, y, z, 0, -1, 0, 9000);
+      if (!h) break;
+      const fy = y - h.t;
+      if (h.ny > 0.35) {                                                      // up-facing -> a floor, not a wall/ceiling underside
+        const upB = meshBackend.bvh.raycast(x, fy + 10, z, 0, 1, 0, 80);
+        if (!(upB && upB.t < 52)) { addNode(x, z, fy, gx, gz); found++; }     // needs ~standing headroom
+      }
+      y = fy - 12;                                                            // continue beneath this surface
+    }
+    return found;
+  };
+
   for (let x = minX + step / 2; x < maxX; x += step) for (let z = minZ + step / 2; z < maxZ; z += step) {
-    const g = meshBackend.groundHeight(x, z, top); if (g <= -1e8) continue;
-    const up = meshBackend.bvh.raycast(x, g + 8, z, 0, 1, 0, 70); if (up && up.t < 56) continue;   // need headroom to stand
     const gx = Math.round((x - minX) / step), gz = Math.round((z - minZ) / step);
-    const n = { id: id++, p: new THREE.Vector3(x, g, z), gx, gz, y: g }; NODES.push(n); EDGES[n.id] = []; cells[gx + ',' + gz] = n;
-  }
-  for (const n of NODES) for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1]]) {
-    const m = cells[(n.gx + dx) + ',' + (n.gz + dz)]; if (!m) continue;
-    if (Math.abs(m.y - n.y) > 48) continue;                // step too tall to walk
-    // reject only a genuine hole/gap between the cells (a furniture-top read is fine — bots route around)
-    if (meshBackend.groundHeight((n.p.x + m.p.x) / 2, (n.p.z + m.p.z) / 2, Math.max(n.y, m.y) + 40) <= -1e8) continue;
-    // wall check at head-height-and-above: only floor-to-ceiling walls sever an edge — low
-    // furniture (desks, cubicles) is walkable-around and must NOT fragment the graph.
-    const hy = Math.min(n.y, m.y) + 100;
-    if (meshBackend.losClear({ x: n.p.x, y: hy, z: n.p.z }, { x: m.p.x, y: hy, z: m.p.z }) && !EDGES[n.id].includes(m.id)) EDGES[n.id].push(m.id);
+    if (sampleColumn(x, z, gx, gz)) continue;
+    // decimation/convex-hull seam can drop a single sample — jitter before giving up so spawn floors stay dense
+    for (const [ox, oz] of [[step * 0.3, 0], [-step * 0.3, 0], [0, step * 0.3], [0, -step * 0.3]]) {
+      const h = meshBackend.bvh.raycast(x + ox, top, z + oz, 0, -1, 0, 9000);
+      if (h) { addNode(x, z, top - h.t, gx, gz); break; }
+    }
   }
 
-  // Stitch disconnected components: the LOS edge test over-severs in cluttered rooms, so the
-  // grid splits into islands (CT and T can end up unreachable from each other). Bridge the
-  // nearest node-pairs across different components, shortest links first, until connected —
-  // guarantees the whole playable area (and both spawns) is one graph. Bots' stuck-recovery
-  // absorbs the rare bridge that clips a wall.
+  // connect to the nearest-storey node in each of 8 adjacent columns within step-up height
+  for (const n of NODES) for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1]]) {
+    const col = cells[(n.gx + dx) + ',' + (n.gz + dz)]; if (!col) continue;
+    let m = null, best = 48;                                                  // step too tall to walk if >48
+    for (const c of col) { const d = Math.abs(c.y - n.y); if (d < best) { best = d; m = c; } }
+    if (!m || EDGES[n.id].includes(m.id)) continue;
+    if (meshBackend.groundHeight((n.p.x + m.p.x) / 2, (n.p.z + m.p.z) / 2, Math.max(n.y, m.y) + 40, 60) <= -1e8) continue;  // genuine gap
+    const hy = Math.min(n.y, m.y) + 100;                                      // only floor-to-ceiling walls sever an edge
+    if (meshBackend.losClear({ x: n.p.x, y: hy, z: n.p.z }, { x: m.p.x, y: hy, z: m.p.z })) { EDGES[n.id].push(m.id); EDGES[m.id].push(n.id); }
+  }
+
+  // Stitch fragmented same-storey islands (the LOS edge test over-severs in cluttered rooms).
+  // SHORT, LOS-checked, small Δy bridges only — so we reconnect a split room WITHOUT building a
+  // bridge that clips a wall or climbs to the roof.
   const parent = NODES.map(n => n.id);
   const find = x => { while (parent[x] !== x) { parent[x] = parent[parent[x]]; x = parent[x]; } return x; };
-  for (const a in EDGES) for (const b of EDGES[a]) parent[find(+a)] = find(b);
-  const cands = [], D2 = 5000 * 5000;   // large enough to fully connect every region (spawns must always be reachable)
+  const union = (i, j) => { parent[find(i)] = find(j); };
+  for (const a in EDGES) for (const b of EDGES[a]) union(+a, b);
+  const linkable = (i, j) => { const hy = Math.min(NODES[i].y, NODES[j].y) + 100; return meshBackend.losClear({ x: NODES[i].p.x, y: hy, z: NODES[i].p.z }, { x: NODES[j].p.x, y: hy, z: NODES[j].p.z }); };
+  const bridge = (i, j) => { union(i, j); if (!EDGES[i].includes(j)) EDGES[i].push(j); if (!EDGES[j].includes(i)) EDGES[j].push(i); };
+  const cands = [], D2 = (step * 4) * (step * 4);
   for (let i = 0; i < NODES.length; i++) for (let j = i + 1; j < NODES.length; j++) {
     if (Math.abs(NODES[i].y - NODES[j].y) > 56) continue;
     const dx = NODES[i].p.x - NODES[j].p.x, dz = NODES[i].p.z - NODES[j].p.z, d2 = dx * dx + dz * dz;
     if (d2 <= D2) cands.push([d2, i, j]);
   }
   cands.sort((a, b) => a[0] - b[0]);
-  for (const [, i, j] of cands) {
-    if (find(i) === find(j)) continue;
-    parent[find(i)] = find(j);
-    if (!EDGES[i].includes(j)) EDGES[i].push(j);
-    if (!EDGES[j].includes(i)) EDGES[j].push(i);
+  for (const [, i, j] of cands) { if (find(i) !== find(j) && linkable(i, j)) bridge(i, j); }
+
+  // PRUNE to spawn-reachable: keeps the playable graph, drops the roof / out-of-bounds shelves.
+  const nodeNear = p => { let bn = null, bd = 1e18; for (const n of NODES) { const dx = n.p.x - p.x, dy = n.y - (p.y || 0), dz = n.p.z - p.z; const d = dx * dx + dy * dy * 0.3 + dz * dz; if (d < bd) { bd = d; bn = n; } } return bn; };
+  const ctSeeds = CT_SPAWNS.map(nodeNear).filter(Boolean), tSeeds = T_SPAWNS.map(nodeNear).filter(Boolean);
+  // guarantee CT and T are mutually reachable (engagement depends on it): bridge their components,
+  // preferring a LOS-clear link, else the shortest same-Δy pair as a last resort.
+  if (ctSeeds.length && tSeeds.length && find(ctSeeds[0].id) !== find(tSeeds[0].id)) {
+    let bestClear = null, bestAny = null;
+    for (const a of NODES) for (const b of NODES) {
+      if (find(a.id) === find(ctSeeds[0].id) && find(b.id) === find(tSeeds[0].id)) {
+        if (Math.abs(a.y - b.y) > 80) continue;
+        const dx = a.p.x - b.p.x, dz = a.p.z - b.p.z, d2 = dx * dx + dz * dz;
+        if (!bestAny || d2 < bestAny[0]) bestAny = [d2, a.id, b.id];
+        if (linkable(a.id, b.id) && (!bestClear || d2 < bestClear[0])) bestClear = [d2, a.id, b.id];
+      }
+    }
+    const pick = bestClear || bestAny; if (pick) bridge(pick[1], pick[2]);
   }
+  const seeds = [...ctSeeds, ...tSeeds];
+  const keep = new Set(); const queue = seeds.map(n => n.id); for (const s of queue) keep.add(s);
+  while (queue.length) { const u = queue.pop(); for (const v of EDGES[u]) if (!keep.has(v)) { keep.add(v); queue.push(v); } }
+
+  // reindex NODES/EDGES to the kept set (ids must stay array indices for A*)
+  const kept = NODES.filter(n => keep.has(n.id)); const remap = new Map(); kept.forEach((n, i) => remap.set(n.id, i));
+  const newEdges = {}; kept.forEach((n, i) => { newEdges[i] = (EDGES[n.id] || []).filter(v => keep.has(v)).map(v => remap.get(v)); });
+  kept.forEach((n, i) => { n.id = i; });
+  NODES.length = 0; NODES.push(...kept);
+  for (const k in EDGES) delete EDGES[k]; for (const k in newEdges) EDGES[k] = newEdges[k];
 }
