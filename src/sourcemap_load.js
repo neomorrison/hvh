@@ -19,11 +19,13 @@ export function loadSourceMap(glbBuffer, spawns, texturedScene) {
   const windowTris = (groups.find(g => g.name === 'windows') || {}).tris || new Float32Array(0);
   const clipTris = (groups.find(g => g.name === 'clip') || {}).tris || new Float32Array(0);
   if (!worldTris.length) throw new Error('No triangles found in the .glb (is it a map export?)');
-  // floors / LOS / bullets / nav use world+windows; the clip hull is a MOVEMENT-only boundary
-  // (Source player_clip semantics) so it keeps players in without blocking sight, fire or bot nav.
-  const bvh = new TriBVH(windowTris.length ? concat([worldTris, windowTris]) : worldTris);
+  // floors / LOS / bullets / nav use the WORLD only. The clip hull and the window glass are
+  // MOVEMENT-only (Source player_clip / breakable-glass semantics): they block walking but you
+  // see and shoot through them, and shooting glass shatters it.
+  const bvh = new TriBVH(worldTris);
   meshBackend.bvh = bvh; meshBackend.bounds = bvh.bounds; meshBackend.active = true;
   meshBackend.clipBvh = clipTris.length ? new TriBVH(clipTris) : null;
+  meshBackend.windowBvh = null; meshBackend.windowPanes = []; meshBackend.windowTriPane = null;
   const b = bvh.bounds;
 
   // world visual: the user's own real textured map (loaded at runtime, never bundled) if
@@ -42,12 +44,22 @@ export function loadSourceMap(glbBuffer, spawns, texturedScene) {
     const mesh = new THREE.Mesh(geo, mat); mesh.receiveShadow = true; mesh.castShadow = true; addMapObject(mesh);
   }
 
-  // window glass: flat semi-reflective panes (collide via the BVH above)
+  // breakable window glass: a movement-only BVH (shoot/see through) split into panes, each its
+  // own reflective mesh; shooting a pane drops its collision and hides it so you can step through.
   if (windowTris.length) {
-    const wg = new THREE.BufferGeometry();
-    wg.setAttribute('position', new THREE.BufferAttribute(windowTris, 3)); wg.computeVertexNormals();
-    const gmat = new THREE.MeshStandardMaterial({ color: 0x2b3a52, metalness: .85, roughness: .07, transparent: true, opacity: .5, side: THREE.DoubleSide });
-    addMapObject(new THREE.Mesh(wg, gmat));
+    const wbvh = new TriBVH(windowTris); wbvh.alive = new Uint8Array(windowTris.length / 9).fill(1);
+    meshBackend.windowBvh = wbvh;
+    const triPane = new Int32Array(windowTris.length / 9);
+    if (texturedScene) texturedScene.traverse(o => { if (o.isMesh && /window|glass/i.test(o.name || '')) o.visible = false; });   // use our breakable panes instead
+    clusterWindowPanes(windowTris).forEach((tl, pi) => {
+      const pp = new Float32Array(tl.length * 9);
+      tl.forEach((t, j) => { for (let c = 0; c < 9; c++) pp[j * 9 + c] = windowTris[t * 9 + c]; triPane[t] = pi; });
+      const pg = new THREE.BufferGeometry(); pg.setAttribute('position', new THREE.BufferAttribute(pp, 3)); pg.computeVertexNormals();
+      const mat = new THREE.MeshStandardMaterial({ color: 0x2b3a52, metalness: .85, roughness: .07, transparent: true, opacity: .5, side: THREE.DoubleSide });
+      const mesh = new THREE.Mesh(pg, mat); addMapObject(mesh);
+      meshBackend.windowPanes.push({ tris: tl, mesh, broken: false });
+    });
+    meshBackend.windowTriPane = triPane;
   }
 
   setupSky(b);                                             // night sky + sun + ambient fill
@@ -156,6 +168,22 @@ function vertexColors(tris, bounds) {
     }
   }
   return col;
+}
+
+// split the window triangle soup into panes = connected components (tris sharing a vertex),
+// so each real window can be shattered independently.
+function clusterWindowPanes(tris) {
+  const ntri = tris.length / 9, parent = new Array(ntri);
+  for (let i = 0; i < ntri; i++) parent[i] = i;
+  const find = x => { while (parent[x] !== x) { parent[x] = parent[parent[x]]; x = parent[x]; } return x; };
+  const vmap = new Map(), key = (x, y, z) => ((x * 8 | 0) + ',' + (y * 8 | 0) + ',' + (z * 8 | 0));
+  for (let t = 0; t < ntri; t++) for (let k = 0; k < 3; k++) {
+    const o = t * 9 + k * 3, kk = key(tris[o], tris[o + 1], tris[o + 2]);
+    const prev = vmap.get(kk); if (prev !== undefined) parent[find(t)] = find(prev); else vmap.set(kk, t);
+  }
+  const groups = new Map();
+  for (let t = 0; t < ntri; t++) { const r = find(t); let a = groups.get(r); if (!a) { a = []; groups.set(r, a); } a.push(t); }
+  return [...groups.values()];
 }
 
 /* sample a grid of standable floor points and connect walkable neighbours */

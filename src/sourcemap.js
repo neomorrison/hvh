@@ -192,12 +192,13 @@ export class TriBVH {
       if (this._rayBox(node, ox, oy, oz, idx, idy, idz) > best) continue;
       if (node.s < 0) { stack.push(node.l, node.r); continue; }
       for (let i = node.s; i < node.e; i++) {
+        if (this.alive && !this.alive[this.idx[i]]) continue;   // skip broken (e.g. shattered window) tris
         const b = this.idx[i] * 9;
         const h = rayTri(ox, oy, oz, dx, dy, dz, T, b, best);
-        if (h && h.t < best) { best = h.t; bn = h; }
+        if (h && h.t < best) { best = h.t; bn = h; bn.tri = this.idx[i]; }
       }
     }
-    return bn ? { t: best, nx: bn.nx, ny: bn.ny, nz: bn.nz } : null;
+    return bn ? { t: best, nx: bn.nx, ny: bn.ny, nz: bn.nz, tri: bn.tri } : null;
   }
   anyHit(ox, oy, oz, dx, dy, dz, maxT) {
     if (this.root < 0) return false;
@@ -206,7 +207,7 @@ export class TriBVH {
       const node = this.nodes[stack.pop()];
       if (this._rayBox(node, ox, oy, oz, idx, idy, idz) > maxT) continue;
       if (node.s < 0) { stack.push(node.l, node.r); continue; }
-      for (let i = node.s; i < node.e; i++) { const b = this.idx[i] * 9; const h = rayTri(ox, oy, oz, dx, dy, dz, T, b, maxT); if (h && h.t > 1e-3 && h.t < maxT) return true; }
+      for (let i = node.s; i < node.e; i++) { if (this.alive && !this.alive[this.idx[i]]) continue; const b = this.idx[i] * 9; const h = rayTri(ox, oy, oz, dx, dy, dz, T, b, maxT); if (h && h.t > 1e-3 && h.t < maxT) return true; }
     }
     return false;
   }
@@ -217,7 +218,7 @@ export class TriBVH {
       const node = this.nodes[stack.pop()];
       if (this._rayBox(node, ox, oy, oz, idx, idy, idz) > maxT) continue;
       if (node.s < 0) { stack.push(node.l, node.r); continue; }
-      for (let i = node.s; i < node.e; i++) { const b = this.idx[i] * 9; const h = rayTri(ox, oy, oz, dx, dy, dz, T, b, maxT); if (h && h.t > 1e-3) hits.push(h); }
+      for (let i = node.s; i < node.e; i++) { if (this.alive && !this.alive[this.idx[i]]) continue; const b = this.idx[i] * 9; const h = rayTri(ox, oy, oz, dx, dy, dz, T, b, maxT); if (h && h.t > 1e-3) hits.push(h); }
     }
     hits.sort((a, b) => a.t - b.t); return hits;
   }
@@ -241,6 +242,7 @@ function rayTri(ox, oy, oz, dx, dy, dz, T, b, maxT) {
 /* ---------------- the mesh backend the engine queries when a source map is active ---------------- */
 export const meshBackend = {
   active: false, bvh: null, clipBvh: null, bounds: null,
+  windowBvh: null, windowPanes: [], windowTriPane: null, onWindowBreak: null,
   losClear(a, b) {
     if (!this.bvh) return true;
     const dx = b.x - a.x, dy = b.y - a.y, dz = b.z - a.z; const len = Math.hypot(dx, dy, dz); if (len < 1) return true;
@@ -292,6 +294,7 @@ export const meshBackend = {
       for (const hy of ys) {
         let h = this.bvh.raycast(sx, hy, sz, ux, 0, uz, maxd);
         if (this.clipBvh) { const c = this.clipBvh.raycast(sx, hy, sz, ux, 0, uz, maxd); if (c && (!h || c.t < h.t)) h = c; }
+        if (this.windowBvh) { const w = this.windowBvh.raycast(sx, hy, sz, ux, 0, uz, maxd); if (w && (!h || w.t < h.t)) h = w; }
         if (h && (!best || h.t < best.t)) best = h;
       }
       return best;
@@ -323,6 +326,7 @@ export const meshBackend = {
       for (const hy of ys) {
         let h = this.bvh.raycast(x, hy, z, ux, 0, uz, radius);
         if (this.clipBvh) { const c = this.clipBvh.raycast(x, hy, z, ux, 0, uz, radius); if (c && (!h || c.t < h.t)) h = c; }
+        if (this.windowBvh) { const w = this.windowBvh.raycast(x, hy, z, ux, 0, uz, radius); if (w && (!h || w.t < h.t)) h = w; }
         if (h && (!best || h.t < best.t)) best = h;
       }
       return best;
@@ -337,7 +341,23 @@ export const meshBackend = {
     }
     return [x, z];
   },
-  clear() { this.active = false; this.bvh = null; this.clipBvh = null; this.bounds = null; },
+  // a bullet along (o,dir) shatters the first window pane it hits (unless a solid wall is closer).
+  // Returns the broken pane or false. Shattering drops the pane's collision + hides its glass.
+  breakWindowsAlong(ox, oy, oz, dx, dy, dz, maxT) {
+    if (!this.windowBvh) return false;
+    const wh = this.windowBvh.raycast(ox, oy, oz, dx, dy, dz, maxT);
+    if (!wh || wh.tri == null) return false;
+    const sh = this.bvh ? this.bvh.raycast(ox, oy, oz, dx, dy, dz, wh.t) : null;
+    if (sh && sh.t < wh.t - 1) return false;                  // a wall is hit before the glass
+    const pane = this.windowPanes[this.windowTriPane[wh.tri]];
+    if (!pane || pane.broken) return false;
+    pane.broken = true;
+    for (const ti of pane.tris) this.windowBvh.alive[ti] = 0; // drop its collision
+    if (pane.mesh) pane.mesh.visible = false;                 // hide its glass
+    if (this.onWindowBreak) this.onWindowBreak(pane);
+    return pane;
+  },
+  clear() { this.active = false; this.bvh = null; this.clipBvh = null; this.bounds = null; this.windowBvh = null; this.windowPanes = []; this.windowTriPane = null; },
 };
 
 /* ---------------- spawn / entity conversion (Source Z-up → game Y-up) ---------------- */
