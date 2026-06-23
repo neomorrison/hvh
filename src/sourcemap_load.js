@@ -50,16 +50,29 @@ export function loadSourceMap(glbBuffer, spawns, texturedScene) {
     const wbvh = new TriBVH(windowTris); wbvh.alive = new Uint8Array(windowTris.length / 9).fill(1);
     meshBackend.windowBvh = wbvh;
     const triPane = new Int32Array(windowTris.length / 9);
-    if (texturedScene) texturedScene.traverse(o => { if (o.isMesh && /window|glass/i.test(o.name || '')) o.visible = false; });   // use our breakable panes instead
     clusterWindowPanes(windowTris).forEach((tl, pi) => {
       const pp = new Float32Array(tl.length * 9);
       tl.forEach((t, j) => { for (let c = 0; c < 9; c++) pp[j * 9 + c] = windowTris[t * 9 + c]; triPane[t] = pi; });
+      let cx = 0, cy = 0, cz = 0; for (let k = 0; k < pp.length; k += 3) { cx += pp[k]; cy += pp[k + 1]; cz += pp[k + 2]; } const nn = pp.length / 3;
       const pg = new THREE.BufferGeometry(); pg.setAttribute('position', new THREE.BufferAttribute(pp, 3)); pg.computeVertexNormals();
       const mat = new THREE.MeshStandardMaterial({ color: 0x2b3a52, metalness: .85, roughness: .07, transparent: true, opacity: .5, side: THREE.DoubleSide });
       const mesh = new THREE.Mesh(pg, mat); addMapObject(mesh);
-      meshBackend.windowPanes.push({ tris: tl, mesh, broken: false });
+      meshBackend.windowPanes.push({ tris: tl, mesh, broken: false, center: { x: cx / nn, y: cy / nn, z: cz / nn } });
     });
     meshBackend.windowTriPane = triPane;
+    // hide ONLY the textured visual glass that a breakable pane actually replaces (by spatial
+    // overlap). A blanket /window|glass/ match would also erase decorative/vehicle glass (truck,
+    // banker, police cab) that has no pane, leaving invisible holes.
+    if (texturedScene && typeof THREE.Box3 === 'function') {
+      texturedScene.updateMatrixWorld(true);
+      const centers = meshBackend.windowPanes.map(p => p.center), box = new THREE.Box3(), c = new THREE.Vector3();
+      texturedScene.traverse(o => {
+        if (o.isMesh && /window|glass/i.test(o.name || '')) {
+          box.setFromObject(o); box.getCenter(c);
+          if (centers.some(p => Math.abs(p.x - c.x) < 240 && Math.abs(p.y - c.y) < 240 && Math.abs(p.z - c.z) < 240)) o.visible = false;
+        }
+      });
+    }
   }
 
   setupSky(b);                                             // night sky + sun + ambient fill
