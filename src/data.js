@@ -64,7 +64,9 @@ export const EYE_STAND = 64, EYE_CROUCH = 46, PLAYER_RADIUS = 16, GRAVITY = 800,
 // bullet penetration (autowall): weapon penPct doubles as penetration power.
 export const PEN = {
   maxSurfaces: 4,        // CS2 stops a bullet after a few surfaces
-  unitsPerPower: 48,     // power(0..1) * this = max EFFECTIVE thickness one surface may be
+  unitsPerPower: 64,     // power(0..1) * this = max EFFECTIVE thickness one surface may be. Tuned
+                         // for the watertight physics hull (two-sided walls give REAL thickness;
+                         // 64 keeps ~85% of single office walls bangable, thick concrete/brick not).
   loneThickness: 20,     // a single-sided (non-manifold) wall face is treated this thick
   perSurfaceLoss: 0.10,  // flat damage loss for crossing any surface
   thickLossK: 0.55,      // extra loss scaled by how thick the surface is vs the cap

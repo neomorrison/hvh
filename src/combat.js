@@ -80,6 +80,7 @@ export function moveAgent(a, dirXZ, dt, combat) {
       const ho = a.crouch ? 44 : 66, rise = a.vel.y * dt;
       let ch = meshBackend.bvh.raycast(a.pos.x, prevY + ho, a.pos.z, 0, 1, 0, rise + 2);
       if (meshBackend.clipBvh) { const c = meshBackend.clipBvh.raycast(a.pos.x, prevY + ho, a.pos.z, 0, 1, 0, rise + 2); if (c && (!ch || c.t < ch.t)) ch = c; }
+      if (meshBackend.windowBvh) { const w = meshBackend.windowBvh.raycast(a.pos.x, prevY + ho, a.pos.z, 0, 1, 0, rise + 2); if (w && (!ch || w.t < ch.t)) ch = w; }   // unbroken glass overhead (consistent with slideXZ/pushOut)
       if (ch) { a.pos.y = prevY + Math.max(0, ch.t - 0.5); a.vel.y = 0; }
     }
     let g = meshBackend.groundHeight(a.pos.x, a.pos.z, a.pos.y);
