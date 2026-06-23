@@ -275,11 +275,36 @@ function deploySource(glb, spawns) {
   return info;
 }
 
+/* ---- the bundled real cs_office map (mesh geometry + spawns) is the main map ---- */
+const MAIN_MAP = { glb: "./maps/cs_office.glb", spawns: "./maps/cs_office.spawns.json", name: "cs_office" };
+let mainMapAssets = null;
+function preloadMainMap() {
+  mainMapAssets = Promise.all([
+    fetch(MAIN_MAP.glb).then(r => { if (!r.ok) throw new Error("map geometry " + r.status); return r.arrayBuffer(); }),
+    fetch(MAIN_MAP.spawns).then(r => r.ok ? r.json() : {}),
+  ]);
+  return mainMapAssets;
+}
+async function deployMainMap() {
+  const ls = $("#loadStat");
+  try {
+    if (ls) ls.textContent = "Loading cs_office…";
+    const [glb, spawns] = await (mainMapAssets || preloadMainMap());
+    spawns.name = spawns.name || MAIN_MAP.name;
+    deploySource(glb, spawns);
+  } catch (e) {                                          // bundled map unreachable → procedural blockout
+    console.warn("cs_office mesh map unavailable, using procedural layout:", e);
+    if (ls) ls.textContent = "";
+    deploy(null);
+  }
+}
+
 function boot() {
   buildCrosshair();
   $("#loadStat").textContent = "Ready.";
   const btn = $("#playBtn"); btn.disabled = false; btn.textContent = "DEPLOY";
-  btn.onclick = () => deploy(null);
+  btn.onclick = () => deployMainMap();
+  preloadMainMap().catch(() => {});                      // warm the download while on the start screen
   const eb = $("#editBtn"); if (eb) eb.onclick = () => openEditor();
   const lb = $("#loadMapBtn"); if (lb) lb.onclick = () => loadAndPlaySource();
 }
