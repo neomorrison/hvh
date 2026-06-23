@@ -53,7 +53,7 @@ export function moveAgent(a, dirXZ, dt, combat) {
     // recover anything that fell out of the world (through a hole / off an edge) — teleport to a team spawn
     if (meshBackend.bounds && a.pos.y < meshBackend.bounds.min[1] - 50) {
       const sp = a.team === TEAM.CT ? CT_SPAWNS : T_SPAWNS;
-      if (sp.length) { const s = sp[(Math.random() * sp.length) | 0]; a.pos.set(s.x, s.y || 0, s.z); const gg = meshBackend.groundHeight(s.x, s.z, (s.y || 0) + 40, 96); if (gg > -1e8) a.pos.y = gg; }
+      if (sp.length) { const s = sp[(Math.random() * sp.length) | 0]; a.pos.set(s.x, s.y || 0, s.z); const gg = meshBackend.groundHeight(s.x, s.z, (s.y || 0), 24); if (gg > -1e8) a.pos.y = gg; }
       a.vel.set(0, 0, 0); a.onGround = true; a.aiPath = []; a.aiTimer = 0;
       a.eye = (a.crouch ? EYE_CROUCH : EYE_STAND) + a.pos.y;
       return;

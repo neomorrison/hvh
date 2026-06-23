@@ -95,6 +95,61 @@ export function parseGLB(buffer) {
   return new Float32Array(tris);                          // 9 floats per triangle, world space
 }
 
+/* Same parse, but returns the triangle soup grouped per top-level mesh node name,
+   e.g. [{name:'world', tris}, {name:'windows', tris}] — lets the loader render and
+   collide groups (reflective glass vs world) separately. */
+export function parseGLBMeshes(buffer) {
+  const u8 = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
+  const ab = u8.buffer; const dv = new DataView(ab, u8.byteOffset, u8.byteLength);
+  let json = null, bin = null;
+  if (dv.getUint32(0, true) === 0x46546C67) {
+    const total = dv.getUint32(8, true); let off = 12;
+    while (off < total) {
+      const clen = dv.getUint32(off, true), ctype = dv.getUint32(off + 4, true); off += 8;
+      const chunk = new Uint8Array(ab, u8.byteOffset + off, clen);
+      if (ctype === 0x4E4F534A) json = JSON.parse(new TextDecoder().decode(chunk));
+      else if (ctype === 0x004E4942) bin = chunk;
+      off += clen;
+    }
+  } else json = JSON.parse(new TextDecoder().decode(u8));
+  const buffers = (json.buffers || []).map(b => { if (b.uri) { if (b.uri.startsWith('data:')) return b64ToBytes(b.uri.slice(b.uri.indexOf('base64,') + 7)); throw new Error('External .bin not supported — export a single .glb'); } return bin; });
+  const readAcc = (idx) => {
+    const acc = json.accessors[idx], bv = json.bufferViews[acc.bufferView], buf = buffers[bv.buffer];
+    const cs = COMP_SIZE[acc.componentType], nc = NUM_COMP[acc.type];
+    const base = (bv.byteOffset || 0) + (acc.byteOffset || 0), stride = bv.byteStride || cs * nc;
+    const dvb = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
+    const out = new Float64Array(acc.count * nc);
+    for (let i = 0; i < acc.count; i++) for (let c = 0; c < nc; c++) out[i * nc + c] = readComp(dvb, base + i * stride + c * cs, acc.componentType);
+    return { data: out, count: acc.count };
+  };
+  const nodes = json.nodes || [];
+  const localMat = n => n.matrix ? n.matrix.slice() : composeTRS(n.translation || [0, 0, 0], n.rotation || [0, 0, 0, 1], n.scale || [1, 1, 1]);
+  const groups = new Map();
+  const visit = (ni, parent, gname) => {
+    const n = nodes[ni]; const m = mul4(parent, localMat(n));
+    const name = n.name || gname || 'mesh';
+    if (n.mesh != null && json.meshes) {
+      let arr = groups.get(name); if (!arr) { arr = []; groups.set(name, arr); }
+      for (const prim of json.meshes[n.mesh].primitives) {
+        if (prim.attributes.POSITION == null) continue;
+        if (prim.mode != null && prim.mode !== 4) continue;
+        const pos = readAcc(prim.attributes.POSITION);
+        const idx = prim.indices != null ? readAcc(prim.indices).data : null;
+        const tc = idx ? idx.length / 3 : pos.count / 3;
+        for (let t = 0; t < tc; t++) for (let k = 0; k < 3; k++) {
+          const vi = idx ? idx[t * 3 + k] : t * 3 + k;
+          const w = tp(m, pos.data[vi * 3], pos.data[vi * 3 + 1], pos.data[vi * 3 + 2]);
+          arr.push(w[0], w[1], w[2]);
+        }
+      }
+    }
+    for (const c of (n.children || [])) visit(c, m, name);
+  };
+  const scn = json.scenes[json.scene || 0];
+  for (const ni of scn.nodes) visit(ni, IDENT4, null);
+  return [...groups.entries()].map(([name, arr]) => ({ name, tris: new Float32Array(arr) }));
+}
+
 /* ---------------- triangle BVH (median split) ---------------- */
 export class TriBVH {
   constructor(tris) {
