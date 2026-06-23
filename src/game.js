@@ -23,8 +23,8 @@ export function buildTeams() {
   refs.human = spawnAgent(t1, true, "you");
   const deck = BOT_PERSONAS.slice(); for (let i = deck.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [deck[i], deck[j]] = [deck[j], deck[i]]; }
   let pi = 0;
-  for (let i = 0; i < 4; i++) { const b = spawnAgent(t1, false, "bot"); applyPersona(b, deck[pi++]); }
-  for (let i = 0; i < 5; i++) { const b = spawnAgent(t2, false, "bot"); applyPersona(b, deck[pi++]); }
+  for (let i = 0; i < 11; i++) { const b = spawnAgent(t1, false, "bot"); applyPersona(b, deck[(pi++) % deck.length]); }   // human + 11 = 12
+  for (let i = 0; i < 12; i++) { const b = spawnAgent(t2, false, "bot"); applyPersona(b, deck[(pi++) % deck.length]); }   // 12
 }
 export function liveHostages() { return GAME.hostages.filter(h => !h.rescued && !h.dead); }
 
@@ -52,7 +52,7 @@ export function resetAgentForRound(a, spawn) {
   const survived = a.alive;
   if (!survived) { a.weapons = {}; a.slotPrimary = null; a.slotSecondary = null; a.armor = 0; a.helmet = false; a.nades = {}; a.curNade = null; a.equippedNade = null; a._wmKey = null; }
   a.alive = true; a.hp = 100; a.pos.copy(spawn); a.vel.set(0, 0, 0); a.pos.y = spawn.y || 0;
-  if (meshBackend.active) { const g = meshBackend.groundHeight(a.pos.x, a.pos.z, a.pos.y + 40); if (g > -1e8) a.pos.y = g; }   // sit on the real floor
+  if (meshBackend.active) { const g = meshBackend.groundHeight(a.pos.x, a.pos.z, a.pos.y + 40, 96); if (g > -1e8) a.pos.y = g; }   // sit on the real floor
   a.eye = EYE_STAND + a.pos.y;
   a.crouch = false; a.scoped = false; a.reloadT = 0; a.fireCd = 0; a.carrying = null; a.flashT = 0; a.hitFlash = 0;
   a.yaw = (spawn.yaw != null) ? spawn.yaw : (a.team === TEAM.CT ? -Math.PI / 2 : Math.PI / 2); a.pitch = 0; a.realYaw = a.yaw;

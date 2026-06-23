@@ -216,32 +216,60 @@ export const meshBackend = {
     }
     return { factor: Math.max(0, factor), surfaces, blocked: false };
   },
-  // floor Y under (x,z) at/below (fromY); -Infinity if nothing
-  groundHeight(x, z, fromY) {
+  // floor Y under (x,z), searching from (fromY + reach) downward; -Infinity if nothing.
+  // `reach` defaults to the CS2 step-up height (18u) for the per-frame walk; floor-SNAP
+  // callers (spawn placement, fall-recovery) pass a larger reach so they don't miss the floor.
+  groundHeight(x, z, fromY, reach = 18) {
     if (!this.bvh) return -Infinity;
-    const top = fromY + 48;                               // allow small step-up
+    const top = fromY + reach;
     const h = this.bvh.raycast(x, top, z, 0, -1, 0, 4000);
     return h ? top - h.t : -Infinity;
   },
-  // horizontal collide+slide from (px,pz)→(nx,nz) at body height y, keeping `radius` off walls
+  // horizontal collide+slide from (px,pz)→(nx,nz) at body height y, keeping `radius` off walls.
+  // Casts at three body heights so a thin wall whose face the centre line misses is still caught.
   slideXZ(px, pz, nx, nz, y, radius) {
     if (!this.bvh) return [nx, nz];
-    let cx = px, cz = pz;
+    const ys = [y - 28, y, y + 24];
+    const ray = (sx, sz, ux, uz, maxd) => {
+      let best = null;
+      for (const hy of ys) { const h = this.bvh.raycast(sx, hy, sz, ux, 0, uz, maxd); if (h && (!best || h.t < best.t)) best = h; }
+      return best;
+    };
     const step = (sx, sz, tx, tz) => {
       const dx = tx - sx, dz = tz - sz; const d = Math.hypot(dx, dz); if (d < 1e-4) return [tx, tz, null];
       const ux = dx / d, uz = dz / d;
-      const h = this.bvh.raycast(sx, y, sz, ux, 0, uz, d + radius);
+      const h = ray(sx, sz, ux, uz, d + radius);
       if (!h || h.t > d + radius) return [tx, tz, null];
       const allow = Math.max(0, h.t - radius);
       return [sx + ux * allow, sz + uz * allow, h];
     };
-    let [ax, az, h1] = step(cx, cz, nx, nz);
+    let [ax, az, h1] = step(px, pz, nx, nz);
     if (h1) {                                             // slide the remaining motion along the wall
       const rx = nx - ax, rz = nz - az; const dot = rx * h1.nx + rz * h1.nz;
       const sxv = rx - h1.nx * dot, szv = rz - h1.nz * dot;
       const [bx, bz] = step(ax, az, ax + sxv, az + szv); ax = bx; az = bz;
     }
     return [ax, az];
+  },
+  // depenetration: push (x,z) out of any wall it ended up within `radius` of, so a
+  // slide can't bury the body in / behind a wall.  A couple of settle passes.
+  pushOut(x, z, y, radius) {
+    if (!this.bvh) return [x, z];
+    const ys = [y - 28, y, y + 24];
+    const probe = (ux, uz) => {
+      let best = null;
+      for (const hy of ys) { const h = this.bvh.raycast(x, hy, z, ux, 0, uz, radius); if (h && (!best || h.t < best.t)) best = h; }
+      return best;
+    };
+    for (let iter = 0; iter < 2; iter++) {
+      let moved = false;
+      for (const [ux, uz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+        const h = probe(ux, uz);
+        if (h && h.t < radius) { const push = radius - h.t; x -= ux * push; z -= uz * push; moved = true; }
+      }
+      if (!moved) break;
+    }
+    return [x, z];
   },
   clear() { this.active = false; this.bvh = null; this.bounds = null; },
 };

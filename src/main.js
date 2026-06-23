@@ -8,7 +8,7 @@ import { agents, refs, GAME, vm, clock, keys, input } from './state.js';
 import { WALLS, NODES, EDGES, segAABB, losClear, penetrate } from './world.js';
 import { updateEffects, nadeProjectiles } from './effects.js';
 import { setViewmodel, updateAgentVisual, hitboxCenter, eyePos } from './agents.js';
-import { manualFire, aimbotFire, fireWeaponCommon, meleeAttack, moveAgent, computeBloom, startReload, finishReload, switchTo, selectBest, visibleTo } from './combat.js';
+import { manualFire, aimbotFire, fireWeaponCommon, meleeAttack, moveAgent, computeBloom, startReload, finishReload, switchTo, selectBest, visibleTo, canShoot } from './combat.js';
 import { botThink } from './ai.js';
 import {
   openBuy, closeBuy, beginBuyToLive, awardWin, endRoundAdvance, startRound, buildTeams,
@@ -88,9 +88,13 @@ function humanMove(dt) {
   human.realYaw = human.yaw;
   human.speedScale = 1;
   const c = human.cheats;
-  if (c.aimbot.on && c.aimbot.autoStop && human.onGround && human.reloadT <= 0) {
-    let see = false; for (const e of agents) { if (e.alive && e.team !== human.team && visibleTo(human, e)) { see = true; break; } }
-    if (see) human.speedScale = THREE.MathUtils.clamp(1 - c.aimbot.hitchance / 100, 0.0, 1);
+  // auto-stop: fully stop the instant a shot WOULD qualify if we were stopped — same
+  // min-damage + min-hit-chance + firable predicate as auto-shoot (canShoot). We judge it
+  // with velocity zeroed so the moving-bloom doesn't keep it from ever engaging while running.
+  if (c.aimbot.on && c.aimbot.autoStop && human.onGround) {
+    const vx = human.vel.x, vz = human.vel.z; human.vel.x = 0; human.vel.z = 0;
+    if (canShoot(human).ok) human.speedScale = 0;
+    human.vel.x = vx; human.vel.z = vz;
   }
   moveAgent(human, dir, dt, false);
 }

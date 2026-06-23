@@ -21,7 +21,7 @@ export function buildCheatMenu() {
       sw("Silent aim", () => c.aimbot.silent, v => c.aimbot.silent = v),
       sw("Auto shoot (triggerbot)", () => c.aimbot.autoShoot, v => c.aimbot.autoShoot = v, "F3"),
       sw("Auto scope", () => c.aimbot.autoScope, v => c.aimbot.autoScope = v),
-      sw("Auto stop (throttle to hit-chance)", () => c.aimbot.autoStop, v => c.aimbot.autoStop = v, "F6"),
+      sw("Auto stop (stop to shoot)", () => c.aimbot.autoStop, v => c.aimbot.autoStop = v, "F6"),
       sw("Auto knife (slash in range)", () => c.aimbot.autoKnife, v => c.aimbot.autoKnife = v),
       sw("Auto revolver (pre-cock R8)", () => c.aimbot.autoRevolver, v => c.aimbot.autoRevolver = v),
     ] },

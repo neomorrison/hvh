@@ -5,9 +5,9 @@
 import * as THREE from 'three';
 import {
   WEAPONS, INACC, INACC_K, AIRBORNE_INACC, LAND_INACC, GRAVITY, JUMP_VEL,
-  EYE_STAND, EYE_CROUCH, PLAYER_RADIUS, ECON, computeDamage,
+  EYE_STAND, EYE_CROUCH, PLAYER_RADIUS, ECON, computeDamage, TEAM,
 } from './data.js';
-import { WALLS, segAABB, rayAABB, penetrate, losClear, collideMove } from './world.js';
+import { WALLS, segAABB, rayAABB, penetrate, losClear, collideMove, MAP_BOUNDS, CT_SPAWNS, T_SPAWNS } from './world.js';
 import { meshBackend } from './sourcemap.js';
 import { hitboxes, hitboxCenter, eyePos, setViewmodel } from './agents.js';
 import { agents } from './state.js';
@@ -50,10 +50,29 @@ export function moveAgent(a, dirXZ, dt, combat) {
   const prevX = a.pos.x, prevZ = a.pos.z;
   a.pos.x += a.vel.x * dt; a.pos.z += a.vel.z * dt; a.pos.y += a.vel.y * dt;
   if (meshBackend.active) {
+    // recover anything that fell out of the world (through a hole / off an edge) — teleport to a team spawn
+    if (meshBackend.bounds && a.pos.y < meshBackend.bounds.min[1] - 50) {
+      const sp = a.team === TEAM.CT ? CT_SPAWNS : T_SPAWNS;
+      if (sp.length) { const s = sp[(Math.random() * sp.length) | 0]; a.pos.set(s.x, s.y || 0, s.z); const gg = meshBackend.groundHeight(s.x, s.z, (s.y || 0) + 40, 96); if (gg > -1e8) a.pos.y = gg; }
+      a.vel.set(0, 0, 0); a.onGround = true; a.aiPath = []; a.aiTimer = 0;
+      a.eye = (a.crouch ? EYE_CROUCH : EYE_STAND) + a.pos.y;
+      return;
+    }
     // imported mesh map: slide along real walls, follow the real (multi-level) floor
     const bodyY = a.pos.y + (a.crouch ? 26 : 40);
-    const [nx, nz] = meshBackend.slideXZ(prevX, prevZ, a.pos.x, a.pos.z, bodyY, PLAYER_RADIUS);
-    a.pos.x = nx; a.pos.z = nz;
+    // substep the horizontal move so a fast frame (jump/peek) can't tunnel a thin wall
+    const mvx = a.pos.x - prevX, mvz = a.pos.z - prevZ;
+    const sub = Math.max(1, Math.ceil(Math.hypot(mvx, mvz) / (PLAYER_RADIUS * 0.75)));
+    let cx = prevX, cz = prevZ;
+    for (let i = 1; i <= sub; i++) {
+      const [sx, sz] = meshBackend.slideXZ(cx, cz, prevX + mvx * i / sub, prevZ + mvz * i / sub, bodyY, PLAYER_RADIUS);
+      cx = sx; cz = sz;
+    }
+    [cx, cz] = meshBackend.pushOut(cx, cz, bodyY, PLAYER_RADIUS);    // depenetrate from walls
+    // hard playable-bounds clamp — last-resort guard against any residual leak out of the map
+    cx = Math.min(Math.max(cx, MAP_BOUNDS.minX + PLAYER_RADIUS), MAP_BOUNDS.maxX - PLAYER_RADIUS);
+    cz = Math.min(Math.max(cz, MAP_BOUNDS.minZ + PLAYER_RADIUS), MAP_BOUNDS.maxZ - PLAYER_RADIUS);
+    a.pos.x = cx; a.pos.z = cz;
     const g = meshBackend.groundHeight(a.pos.x, a.pos.z, a.pos.y);
     if (g > -1e8 && a.pos.y <= g + 0.5) {
       a.pos.y = g;
@@ -75,19 +94,64 @@ export function moveAgent(a, dirXZ, dt, combat) {
   collideMove(a.pos, PLAYER_RADIUS, a.pos.y, a.crouch ? 46 : 72);
 }
 
-/* anti-aim "dodge" — probability a shot at the aimed point connects to the real hitbox */
-export function resolveHitChance(shooter, target) {
-  let base = (shooter.cheats.aimbot.hitchance || 50) / 100;
-  if (target.alive && target.cheats.antiaim.on) {
-    const aaStrength = (target.cheats.antiaim.desync ? (target.cheats.antiaim.desyncAngle / 58) : 0.4) *
-      (target.cheats.antiaim.yaw === "jitter" || target.cheats.antiaim.yaw === "spin" ? 1.0 : 0.7);
-    const resolve = shooter.cheats.resolver.on ? shooter.cheats.resolver.accuracy : 0.0;
-    const bodyAim = shooter.cheats.aimbot.forceBody || shooter.cheats.aimbot.safepoint;
-    const aaEff = aaStrength * (bodyAim ? 0.30 : 1.0);
-    const beat = resolve - aaEff * 0.7;
-    base *= THREE.MathUtils.clamp(0.5 + beat, bodyAim ? 0.55 : 0.12, 1.0);
+/* Hit chance = pure accuracy from the live bloom cone vs the target hitbox's
+   angular size at the crosshair.  No desync / resolver / anti-aim term — a shot
+   aimed at the hitbox lands iff the cone is tight enough to keep it on target. */
+export function computeAccuracy(a, aimPoint, target, group) {
+  const dist = Math.max(1, eyePos(a).distanceTo(aimPoint));
+  const cone = computeBloom(a);                              // bullet spread half-angle (radians)
+  if (cone < 1e-5) return 1;
+  const hb = hitboxes(target).find(h => h.group === group);
+  if (!hb) return 0;
+  const r = Math.min(hb.maxX - hb.minX, hb.maxY - hb.minY, hb.maxZ - hb.minZ) / 2;   // conservative target radius
+  const targetHalfAngle = Math.atan2(r, dist);
+  return THREE.MathUtils.clamp(targetHalfAngle / cone, 0, 1);
+}
+
+/* Shared "can I take this shot right now?" predicate used by BOTH auto-shoot and
+   auto-stop so they agree exactly.  Picks the best target + first hitbox meeting
+   min-damage, then evaluates min-hit-chance and weapon-firable.
+   Returns { have, ok, tgt, group, aimPoint, through, dmg, hitChance } where
+     have = a min-damage hitbox exists to aim at,
+     ok   = have AND firable (real gun, not reloading, has ammo) AND hitChance >= min. */
+export function canShoot(a) {
+  const cb = a.cheats;
+  const res = { have: false, ok: false, tgt: null, group: null, aimPoint: null, through: null, dmg: 0, hitChance: 0 };
+  const enemies = agents.filter(t => t.alive && t.team !== a.team);
+  if (!enemies.length) return res;
+  const me = eyePos(a);
+  let cands = enemies.map(t => ({ t, d: me.distanceTo(t.pos), vis: visibleTo(a, t) })).filter(c => c.vis || cb.autowall.on);
+  if (!cands.length) return res;
+  if (cb.aimbot.target === "lowhp") cands.sort((x, y) => x.t.hp - y.t.hp);
+  else if (cb.aimbot.target === "distance") cands.sort((x, y) => x.d - y.d);
+  else {
+    const fwd = new THREE.Vector3(0, 0, -1).applyEuler(new THREE.Euler(a.pitch, a.yaw, 0, 'YXZ'));
+    cands.forEach(c => { const to = hitboxCenter(c.t, "chest").sub(me).normalize(); c.dot = fwd.dot(to); });
+    cands.sort((x, y) => y.dot - x.dot);
   }
-  return THREE.MathUtils.clamp(base, 0, 1);
+  const tgt = cands[0].t; res.tgt = tgt;
+  const directVis = visibleTo(a, tgt);
+  const order = cb.aimbot.forceBody ? ["stomach", "chest", "legs"]
+    : (cb.aimbot.priority === "head" ? ["head", "chest", "stomach"] : ["chest", "stomach", "head"]);
+  const minDmg = Math.max(cb.aimbot.minDmg || 1, !directVis ? (cb.autowall.minDmg || 1) : 1);
+  for (const group of order) {
+    const aimPoint = hitboxCenter(tgt, group);
+    const dist = me.distanceTo(aimPoint);
+    const through = penetrate(me, aimPoint, a.cur);
+    if (!directVis) { if (!cb.autowall.on || through.blocked || through.factor <= 0) continue; }
+    const base = computeDamage(a.cur, group, dist, tgt.armor > 0, tgt.helmet, tgt.armor);
+    const dmg = Math.round(base.damage * (directVis ? 1 : through.factor));
+    if (dmg >= minDmg) { res.group = group; res.aimPoint = aimPoint; res.through = directVis ? { factor: 1, surfaces: 0, blocked: false } : through; res.dmg = dmg; break; }
+  }
+  if (!res.group) return res;
+  res.have = true;
+  res.hitChance = computeAccuracy(a, res.aimPoint, tgt, res.group);
+  const w = WEAPONS[a.cur];
+  const firable = !!w && !w.melee && a.reloadT <= 0 && (a.weapons[a.cur]?.ammo || 0) > 0;
+  // The human's auto-shoot must respect the configured Min Hit Chance (items 10/11). Bots are
+  // aimbots — they always take the shot when able; their persona skill caps the hit roll below.
+  res.ok = firable && (!a.isHuman || res.hitChance * 100 >= (cb.aimbot.hitchance || 0));
+  return res;
 }
 
 export function applyHit(shooter, target, group, dist, throughWall) {
@@ -186,69 +250,36 @@ export function manualFire(a) {
   if (a.isHuman) { let near = false; for (const t of agents) { if (t.alive && t.team !== a.team && origin.distanceTo(t.pos) < 2500 && visibleTo(a, t)) { near = true; break; } } if (near) addHitLog("missed — inaccuracy", "inacc"); }
 }
 
-/* AIMBOT fire (bot or human-with-aimbot): pick target + hitbox, gate on
-   min-damage / autowall-min-damage / hit-chance, then apply.  Min damage and
-   hit chance are now strictly respected — if no hitbox meets the threshold the
-   shot is NOT taken. */
+/* AIMBOT fire (bot or human-with-aimbot): aim at the best min-damage hitbox, then
+   fire only when the shot is firable AND meets the configured min hit chance.
+   Target/hitbox/min-damage/hit-chance selection is shared with auto-stop via
+   canShoot(), so the two features engage under exactly the same conditions. */
 export function aimbotFire(a) {
-  const cb = a.cheats; const enemies = agents.filter(t => t.alive && t.team !== a.team);
-  if (!enemies.length) return false;
+  const cb = a.cheats;
+  const cs = canShoot(a);
+  if (!cs.have) return false;                                // no min-damage hitbox to aim at
   const me = eyePos(a);
-  let cands = enemies.map(t => ({ t, d: me.distanceTo(t.pos), vis: visibleTo(a, t) }));
-  cands = cands.filter(c => c.vis || cb.autowall.on);
-  if (!cands.length) return false;
-  if (cb.aimbot.target === "lowhp") cands.sort((x, y) => x.t.hp - y.t.hp);
-  else if (cb.aimbot.target === "distance") cands.sort((x, y) => x.d - y.d);
-  else {
-    const fwd = new THREE.Vector3(0, 0, -1).applyEuler(new THREE.Euler(a.pitch, a.yaw, 0, 'YXZ'));
-    cands.forEach(c => { const to = hitboxCenter(c.t, "chest").sub(me).normalize(); c.dot = fwd.dot(to); });
-    cands.sort((x, y) => y.dot - x.dot);
-  }
-  const tgt = cands[0].t;
-  const directVis = visibleTo(a, tgt);
-
-  // hitbox search order (head/body priority, or forced body)
-  const order = cb.aimbot.forceBody ? ["stomach", "chest", "legs"]
-    : (cb.aimbot.priority === "head" ? ["head", "chest", "stomach"] : ["chest", "stomach", "head"]);
-  // effective minimum damage that MUST be met to take the shot
-  const minDmg = Math.max(cb.aimbot.minDmg || 1, !directVis ? (cb.autowall.minDmg || 1) : 1);
-
-  // find the first hitbox whose (penetration-adjusted) damage meets the threshold
-  let chosen = null, chosenThrough = null, chosenAim = null;
-  for (const group of order) {
-    const aimPoint = hitboxCenter(tgt, group);
-    const dist = me.distanceTo(aimPoint);
-    const through = penetrate(me, aimPoint, a.cur);
-    if (!directVis) { if (!cb.autowall.on || through.blocked || through.factor <= 0) continue; }
-    const base = computeDamage(a.cur, group, dist, tgt.armor > 0, tgt.helmet, tgt.armor);
-    const dmg = Math.round(base.damage * (directVis ? 1 : through.factor));
-    if (dmg >= minDmg) { chosen = group; chosenThrough = directVis ? { factor: 1, surfaces: 0, blocked: false } : through; chosenAim = aimPoint; break; }
-  }
-  if (!chosen) return false;   // nothing meets min damage / autowall min damage → don't fire
-
-  // turn view toward the chosen aim point
-  const dirTo = chosenAim.clone().sub(me).normalize();
+  const dirTo = cs.aimPoint.clone().sub(me).normalize();
   const wantYaw = Math.atan2(-dirTo.x, -dirTo.z), wantPitch = Math.asin(THREE.MathUtils.clamp(dirTo.y, -1, 1));
   if (!cb.aimbot.silent) { a.yaw = wantYaw; a.pitch = wantPitch; }
   a.realYaw = wantYaw;
   const w = WEAPONS[a.cur];
-  if (w.scope && cb.aimbot.autoScope && !a.scoped) a.scoped = true;
-
-  // fire gate
-  if (a.fireCd > 0 || a.reloadT > 0) return false;
+  if (w && w.scope && cb.aimbot.autoScope && !a.scoped) a.scoped = true;
+  // fire only when the shot qualifies (firable + min hit chance) and off cooldown
+  if (!cs.ok) return false;
+  if (a.fireCd > 0) return false;
   if ((a.weapons[a.cur].ammo || 0) <= 0) { startReload(a); return false; }
-  const dist = me.distanceTo(chosenAim);
-  const hc = resolveHitChance(a, tgt);
-  const sb = computeBloom(a);
-  const accFactor = THREE.MathUtils.clamp(1 - Math.max(0, sb - 0.015) / 0.12, 0.06, 1);  // scoped+still ≈ 1
+  const dist = me.distanceTo(cs.aimPoint);
   fireWeaponCommon(a);
-  addTracer(me.clone().add(dirTo.clone().multiplyScalar(40)), chosenAim);
-  const roll = Math.random();
-  if (roll < hc * accFactor) {
-    applyHit(a, tgt, chosen, dist, chosenThrough);
+  addTracer(me.clone().add(dirTo.clone().multiplyScalar(40)), cs.aimPoint);
+  // human lands at pure bloom accuracy (already past the min-hit-chance gate); a bot lands at
+  // min(accuracy, persona skill) so distance/movement still matter but skilled bots stay lethal.
+  const hitProb = a.isHuman ? cs.hitChance : Math.min(cs.hitChance, (cb.aimbot.hitchance || 100) / 100);
+  if (Math.random() < hitProb) {
+    applyHit(a, cs.tgt, cs.group, dist, cs.through);
   } else {
-    if (a.isHuman) addHitLog(roll >= hc ? "missed — resolver" : "missed — inaccuracy", roll >= hc ? "resolver" : "inacc");
-    addImpact(chosenAim.clone().add(new THREE.Vector3((Math.random() - 0.5) * 40, (Math.random() - 0.5) * 40, (Math.random() - 0.5) * 40)));
+    if (a.isHuman) addHitLog("missed — inaccuracy", "inacc");
+    addImpact(cs.aimPoint.clone().add(new THREE.Vector3((Math.random() - 0.5) * 40, (Math.random() - 0.5) * 40, (Math.random() - 0.5) * 40)));
   }
   return true;
 }

@@ -125,6 +125,19 @@ export const BOT_PERSONAS = [
   { name: "dezync", style: "passive", aim: { priority: "head", hitchance: 93, forceBody: false }, res: 0.94, aa: { yaw: "sideways", pitch: "zero", desyncAngle: 58 }, wepBias: "ssg" },
   { name: "mirage", style: "rush", aim: { priority: "head", hitchance: 79, forceBody: false }, res: 0.72, aa: { yaw: "jitter", pitch: "down", desyncAngle: 54 }, wepBias: "r8" },
 ];
+// extra personas so a full 12v12 (23 bots) gets distinct names + varied behaviour
+const _EXTRA_NAMES = ["zephyr", "quartz", "blaze", "specter", "vortex", "raven", "cobalt", "phantom", "glitch", "static", "ember", "fang", "drift", "havoc", "pulse", "rogue"];
+const _STYLES = ["rage", "peek", "passive", "rush"], _YAWS = ["jitter", "sideways", "spin", "back"], _PITCHES = ["down", "down", "up", "zero"], _BIASES = ["deagle", "ssg", "scar", "g3", "r8", "duals"];
+for (let i = 0; i < _EXTRA_NAMES.length; i++) {
+  const head = Math.random() < 0.7;
+  BOT_PERSONAS.push({
+    name: _EXTRA_NAMES[i], style: _STYLES[i % _STYLES.length],
+    aim: { priority: head ? "head" : "stomach", hitchance: 74 + Math.floor(Math.random() * 20), forceBody: !head },
+    res: 0.68 + Math.random() * 0.26,
+    aa: { yaw: _YAWS[i % _YAWS.length], pitch: _PITCHES[i % _PITCHES.length], desyncAngle: 48 + Math.floor(Math.random() * 11) },
+    wepBias: _BIASES[i % _BIASES.length],
+  });
+}
 export function applyPersona(a, p) {
   a.persona = p; a.name = p.name;
   const c = a.cheats;
@@ -149,6 +162,7 @@ export function spawnAgent(team, isHuman, name) {
     cheats: defaultCheats(!isHuman),
     boughtThisBuy: {},
     aiPath: [], aiGoal: null, aiNode: 0, aiTimer: 0, aiTarget: null, aiState: "roam", aiStrafe: 1, aiNextStrafe: 0,
+    aiLastPos: new THREE.Vector3(), aiStuck: 0,
     carrying: null, flashT: 0, lastDamageFrom: null, hitFlash: 0,
     landBloom: 0, onGround: true,
   };
