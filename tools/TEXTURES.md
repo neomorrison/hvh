@@ -1,13 +1,12 @@
-# Real cs_office textures (optional, local)
+# cs_office textures
 
-By default the imported cs_office map renders with a procedural floor/wall/ceiling look — **no
-Valve texture art is bundled in this repo** (it's public-facing). If you want the map to render
-with its actual CS2 textures, generate the textured map from **your own** CS2 install and drop it
-in next to the geometry. The game loads it at runtime; it is git-ignored and never committed.
+This personal project bundles the real CS2 textures as `maps/cs_office.tex.glb` (decompiled from
+`cs_office.vpk`). On deploy, `main.js` fetches it, loads it with `GLTFLoader`, and uses it as the
+visual mesh (collision/spawns still come from the small `maps/cs_office.glb`). If it's absent the
+game falls back to a procedural floor/wall/ceiling look.
 
-The engine already supports this: on deploy, `main.js` fetches `./maps/cs_office.tex.glb`, and if
-it's present it's loaded with `GLTFLoader` and used as the visual mesh (collision/spawns still come
-from the small `cs_office.glb`). If it's absent, you get the procedural look.
+These textures are Valve's IP — included only for personal/private use, not redistribution. To
+regenerate (e.g. higher resolution) from **your own** CS2 install:
 
 ## Generate it (once, on your machine)
 
