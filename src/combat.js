@@ -222,6 +222,7 @@ export function manualFire(a) {
   let spread = computeBloom(a);
   if (a.cur === "r8" && a.fireMode === "fan") spread += 0.06;
   dir.x += (Math.random() - 0.5) * spread; dir.y += (Math.random() - 0.5) * spread; dir.z += (Math.random() - 0.5) * spread; dir.normalize();
+  if (meshBackend.active) meshBackend.breakWindowsAlong(origin.x, origin.y, origin.z, dir.x, dir.y, dir.z, 9000);   // shatter glass in the line of fire
   // nearest enemy hitbox along the ray (walls accounted for afterwards via penetration)
   let best = null, bd = 9000, bg = null;
   for (const t of agents) {
@@ -278,6 +279,7 @@ export function aimbotFire(a) {
   const dist = me.distanceTo(cs.aimPoint);
   fireWeaponCommon(a);
   addTracer(me.clone().add(dirTo.clone().multiplyScalar(40)), cs.aimPoint);
+  if (meshBackend.active) meshBackend.breakWindowsAlong(me.x, me.y, me.z, dirTo.x, dirTo.y, dirTo.z, dist + 60);   // shatter glass in the line of fire
   // human lands at pure bloom accuracy (already past the min-hit-chance gate); a bot lands at
   // min(accuracy, persona skill) so distance/movement still matter but skilled bots stay lethal.
   const hitProb = a.isHuman ? cs.hitChance : Math.min(cs.hitChance, (cb.aimbot.hitchance || 100) / 100);

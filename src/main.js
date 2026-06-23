@@ -338,7 +338,7 @@ function boot() {
 /* debug/test surface */
 window.HVH = {
   get GAME() { return GAME; }, get agents() { return agents; }, get human() { return refs.human; },
-  WEAPONS, ECON, computeDamage, WALLS, NODES, EDGES, segAABB, losClear, penetrate, camera, scene, renderer,
+  WEAPONS, ECON, computeDamage, WALLS, NODES, EDGES, segAABB, losClear, penetrate, camera, scene, renderer, meshBackend,
   deploy, deploySource,
   fastForward(secs) { const dt = 1 / 60; let t = 0; while (t < secs) { step(dt); t += dt; } return { phase: GAME.phase, score: [GAME.scoreCT, GAME.scoreT] }; },
   computeBloom(a) { return computeBloom(a || refs.human); },
