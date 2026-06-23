@@ -240,7 +240,7 @@ function rayTri(ox, oy, oz, dx, dy, dz, T, b, maxT) {
 
 /* ---------------- the mesh backend the engine queries when a source map is active ---------------- */
 export const meshBackend = {
-  active: false, bvh: null, bounds: null,
+  active: false, bvh: null, clipBvh: null, bounds: null,
   losClear(a, b) {
     if (!this.bvh) return true;
     const dx = b.x - a.x, dy = b.y - a.y, dz = b.z - a.z; const len = Math.hypot(dx, dy, dz); if (len < 1) return true;
@@ -263,8 +263,8 @@ export const meshBackend = {
     const maxThick = Math.max(8, power * PEN.unitsPerPower);
     let factor = 1, surfaces = 0;
     for (let i = 0; i < ts.length; i += 2) {
-      const enterT = ts[i], exitT = (i + 1 < ts.length) ? ts[i + 1] : enterT + 8;   // single-sided → 8u default
-      const effThick = Math.max(2, exitT - enterT) * 0.9;  // mesh walls ~ concrete-ish density
+      const enterT = ts[i], exitT = (i + 1 < ts.length) ? ts[i + 1] : enterT + PEN.loneThickness;   // single-sided wall (decimated back face gone)
+      const effThick = Math.max(2, exitT - enterT);
       surfaces++; if (surfaces > PEN.maxSurfaces) return { factor: 0, surfaces, blocked: true };
       if (effThick > maxThick) return { factor: 0, surfaces, blocked: true };        // too thick to punch through
       factor *= (1 - PEN.perSurfaceLoss) * (1 - (effThick / maxThick) * PEN.thickLossK);
@@ -280,14 +280,20 @@ export const meshBackend = {
     const h = this.bvh.raycast(x, top, z, 0, -1, 0, 4000);
     return h ? top - h.t : -Infinity;
   },
-  // horizontal collide+slide from (px,pz)→(nx,nz) at body height y, keeping `radius` off walls.
-  // Casts at three body heights so a thin wall whose face the centre line misses is still caught.
-  slideXZ(px, pz, nx, nz, y, radius) {
+  // horizontal collide+slide from (px,pz)→(nx,nz), keeping `radius` off walls. Casts at body
+  // heights strictly ABOVE the step-up zone so stair risers (≤18u) don't block forward motion,
+  // while full-height walls still do; a thin wall the centre line misses is caught by the others.
+  slideXZ(px, pz, nx, nz, feetY, radius, crouch) {
     if (!this.bvh) return [nx, nz];
-    const ys = [y - 28, y, y + 24];
+    const head = feetY + (crouch ? 44 : 66);
+    const ys = [feetY + 22, (feetY + 22 + head) / 2, head];
     const ray = (sx, sz, ux, uz, maxd) => {
       let best = null;
-      for (const hy of ys) { const h = this.bvh.raycast(sx, hy, sz, ux, 0, uz, maxd); if (h && (!best || h.t < best.t)) best = h; }
+      for (const hy of ys) {
+        let h = this.bvh.raycast(sx, hy, sz, ux, 0, uz, maxd);
+        if (this.clipBvh) { const c = this.clipBvh.raycast(sx, hy, sz, ux, 0, uz, maxd); if (c && (!h || c.t < h.t)) h = c; }
+        if (h && (!best || h.t < best.t)) best = h;
+      }
       return best;
     };
     const step = (sx, sz, tx, tz) => {
@@ -308,12 +314,17 @@ export const meshBackend = {
   },
   // depenetration: push (x,z) out of any wall it ended up within `radius` of, so a
   // slide can't bury the body in / behind a wall.  A couple of settle passes.
-  pushOut(x, z, y, radius) {
+  pushOut(x, z, feetY, radius, crouch) {
     if (!this.bvh) return [x, z];
-    const ys = [y - 28, y, y + 24];
+    const head = feetY + (crouch ? 44 : 66);
+    const ys = [feetY + 22, (feetY + 22 + head) / 2, head];
     const probe = (ux, uz) => {
       let best = null;
-      for (const hy of ys) { const h = this.bvh.raycast(x, hy, z, ux, 0, uz, radius); if (h && (!best || h.t < best.t)) best = h; }
+      for (const hy of ys) {
+        let h = this.bvh.raycast(x, hy, z, ux, 0, uz, radius);
+        if (this.clipBvh) { const c = this.clipBvh.raycast(x, hy, z, ux, 0, uz, radius); if (c && (!h || c.t < h.t)) h = c; }
+        if (h && (!best || h.t < best.t)) best = h;
+      }
       return best;
     };
     for (let iter = 0; iter < 2; iter++) {
@@ -326,7 +337,7 @@ export const meshBackend = {
     }
     return [x, z];
   },
-  clear() { this.active = false; this.bvh = null; this.bounds = null; },
+  clear() { this.active = false; this.bvh = null; this.clipBvh = null; this.bounds = null; },
 };
 
 /* ---------------- spawn / entity conversion (Source Z-up → game Y-up) ---------------- */

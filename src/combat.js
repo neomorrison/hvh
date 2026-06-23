@@ -58,23 +58,29 @@ export function moveAgent(a, dirXZ, dt, combat) {
       a.eye = (a.crouch ? EYE_CROUCH : EYE_STAND) + a.pos.y;
       return;
     }
-    // imported mesh map: slide along real walls, follow the real (multi-level) floor
-    const bodyY = a.pos.y + (a.crouch ? 26 : 40);
+    // imported mesh map: slide along real walls (above the step zone so stairs stay walkable),
+    // follow the real (multi-level) floor
+    const feetY = a.pos.y, crouch = a.crouch;
     // substep the horizontal move so a fast frame (jump/peek) can't tunnel a thin wall
     const mvx = a.pos.x - prevX, mvz = a.pos.z - prevZ;
     const sub = Math.max(1, Math.ceil(Math.hypot(mvx, mvz) / (PLAYER_RADIUS * 0.75)));
     let cx = prevX, cz = prevZ;
     for (let i = 1; i <= sub; i++) {
-      const [sx, sz] = meshBackend.slideXZ(cx, cz, prevX + mvx * i / sub, prevZ + mvz * i / sub, bodyY, PLAYER_RADIUS);
+      const [sx, sz] = meshBackend.slideXZ(cx, cz, prevX + mvx * i / sub, prevZ + mvz * i / sub, feetY, PLAYER_RADIUS, crouch);
       cx = sx; cz = sz;
     }
-    [cx, cz] = meshBackend.pushOut(cx, cz, bodyY, PLAYER_RADIUS);    // depenetrate from walls
+    [cx, cz] = meshBackend.pushOut(cx, cz, feetY, PLAYER_RADIUS, crouch);    // depenetrate from walls
     // hard playable-bounds clamp — last-resort guard against any residual leak out of the map
     cx = Math.min(Math.max(cx, MAP_BOUNDS.minX + PLAYER_RADIUS), MAP_BOUNDS.maxX - PLAYER_RADIUS);
     cz = Math.min(Math.max(cz, MAP_BOUNDS.minZ + PLAYER_RADIUS), MAP_BOUNDS.maxZ - PLAYER_RADIUS);
     a.pos.x = cx; a.pos.z = cz;
-    const g = meshBackend.groundHeight(a.pos.x, a.pos.z, a.pos.y);
-    if (g > -1e8 && a.pos.y <= g + 0.5) {
+    let g = meshBackend.groundHeight(a.pos.x, a.pos.z, a.pos.y);
+    let snap = g > -1e8 && a.pos.y <= g + 0.5;                  // landing / step-up onto a ≤18u ledge
+    if (!snap && wasOnGround && a.vel.y <= 0) {                 // grounded last frame, not jumping → stick to a nearby
+      const gd = meshBackend.groundHeight(a.pos.x, a.pos.z, a.pos.y, 4);   // lower step so walking down stairs/edges doesn't free-fall
+      if (gd > -1e8 && a.pos.y - gd <= 24) { g = gd; snap = true; }
+    }
+    if (snap) {
       a.pos.y = g;
       if (!wasOnGround) { const impact = Math.min(1, Math.abs(descend) / JUMP_VEL); a.landBloom = Math.max(a.landBloom || 0, LAND_INACC * (0.45 + impact * 0.9)); }
       a.vel.y = 0; a.onGround = true;
