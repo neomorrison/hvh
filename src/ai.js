@@ -2,9 +2,9 @@
    Bot economy + HvH behaviour.  Goal selection is map-agnostic so bots can
    path on both cs_office and any custom (grid-nav) level.                  */
 import * as THREE from 'three';
-import { WEAPONS, TEAM } from './data.js';
-import { NODES, RESCUE_ZONES, MAP_BOUNDS, astar, nearestNode } from './world.js';
-import { hitboxCenter } from './agents.js';
+import { WEAPONS, TEAM, JUMP_VEL } from './data.js';
+import { NODES, RESCUE_ZONES, MAP_BOUNDS, astar, nearestNode, losClear } from './world.js';
+import { hitboxCenter, eyePos } from './agents.js';
 import { agents } from './state.js';
 import { aimbotFire, moveAgent, meleeAttack, visibleTo, startReload, giveWeapon, hasAnyAmmo } from './combat.js';
 import { liveHostages } from './game.js';
@@ -27,9 +27,49 @@ export function botBuy(a) {
   if (a.money >= 200 && Math.random() < 0.3) { a.nades.flash = (a.nades.flash || 0) + 1; a.money -= 200; }
 }
 
+const SEP_RADIUS = 90;   // bots keep this much space from same-team bots to avoid bunching
+
+function separation(a) {
+  let sx = 0, sz = 0, n = 0;
+  for (const m of agents) {
+    if (m === a || !m.alive || m.team !== a.team) continue;
+    const dx = a.pos.x - m.pos.x, dz = a.pos.z - m.pos.z, d2 = dx * dx + dz * dz;
+    if (d2 > 1 && d2 < SEP_RADIUS * SEP_RADIUS) { const d = Math.sqrt(d2); sx += dx / d; sz += dz / d; n++; }
+  }
+  return n ? new THREE.Vector3(sx, 0, sz).normalize() : null;
+}
+
+// move along `dir` (blended with teammate separation) with stuck detection: hop a
+// ledge/step, and if still wedged give up and repath.
+function botMove(a, dir, dt, combat) {
+  const sep = separation(a);
+  const d = dir.clone().setY(0);
+  if (sep) d.add(sep.multiplyScalar(0.6));
+  if (d.lengthSq() > 1e-4) d.normalize();
+  const before = a.pos.clone();
+  moveAgent(a, d, dt, combat);
+  if (dir.lengthSq() > 1e-4 && a.pos.distanceTo(before) < dt * 30) {
+    a.aiStuck = (a.aiStuck || 0) + dt;
+    if (a.aiStuck > 0.3 && a.onGround && a.aiState !== "fight") a.vel.y = JUMP_VEL;   // hop a ledge while roaming (not mid-fight — jumping ruins aim)
+    if (a.aiStuck > 0.8 && a.aiState !== "fight") { a.aiPath = []; a.aiTimer = 0; a.yaw += (Math.random() - 0.5) * 1.2; a.aiStuck = 0; }
+  } else a.aiStuck = 0;
+}
+
+// follow the a* path, skipping ahead to the furthest node with clear line of sight
+// so bots cut straight across open rooms instead of zig-zagging between grid cells.
+function followPath(a, dt, combat) {
+  if (!a.aiPath.length || !NODES[a.aiPath[0]]) { a.aiPath = []; return; }
+  while (a.aiPath.length > 1 && NODES[a.aiPath[1]] && losClear(eyePos(a), NODES[a.aiPath[1]].p)) a.aiPath.shift();
+  const to = NODES[a.aiPath[0]].p.clone().sub(a.pos); to.y = 0;
+  if (to.length() < 72) { a.aiPath.shift(); return; }
+  a.yaw = Math.atan2(-to.x, -to.z);
+  botMove(a, to.normalize(), dt, combat);
+}
+
 export function botThink(a, dt) {
   if (!a.alive) return;
   a.aiTimer -= dt;
+  a.speedScale = 1;
   const enemies = agents.filter(t => t.alive && t.team !== a.team);
   // OUT OF AMMO → auto-knife: hunt nearest enemy and slash
   if (!hasAnyAmmo(a) && enemies.length) {
@@ -37,23 +77,32 @@ export function botThink(a, dt) {
     a.aiState = "knife"; a.scoped = false; if (a.cur !== 'knife') a.cur = 'knife';
     a.yaw = Math.atan2(-(kt.pos.x - a.pos.x), -(kt.pos.z - a.pos.z)); a.realYaw = a.yaw; a.pitch = 0;
     if (kd > WEAPONS.knife.knifeRange * 0.8) {
-      if (visibleTo(a, kt)) moveAgent(a, kt.pos.clone().sub(a.pos).setY(0).normalize(), dt, true);
-      else {
-        if (!a.aiPath.length || a.aiTimer <= 0) { a.aiPath = astar(nearestNode(a.pos), nearestNode(kt.pos)); a.aiTimer = 1 + Math.random(); }
-        if (a.aiPath.length) { const n = NODES[a.aiPath[0]].p, to = n.clone().sub(a.pos).setY(0); if (to.length() < 80) a.aiPath.shift(); else { a.yaw = Math.atan2(-to.x, -to.z); moveAgent(a, to.normalize(), dt, true); } }
-      }
+      if (visibleTo(a, kt)) botMove(a, kt.pos.clone().sub(a.pos).setY(0).normalize(), dt, true);
+      else { if (!a.aiPath.length || a.aiTimer <= 0) { a.aiPath = astar(nearestNode(a.pos), nearestNode(kt.pos)); a.aiTimer = 1 + Math.random(); } followPath(a, dt, true); }
     } else { moveAgent(a, new THREE.Vector3(0, 0, 0), dt, true); meleeAttack(a, kd < 38); }
     return;
   }
-  let target = null, bestd = 1e9;
-  for (const e of enemies) { if (visibleTo(a, e)) { const d = a.pos.distanceTo(e.pos); if (d < bestd) { bestd = d; target = e; } } }
-  if (!target && a.cheats.autowall.on) { for (const e of enemies) { const d = a.pos.distanceTo(e.pos); if (d < 900 && d < bestd) { bestd = d; target = e; } } }
+  // weighted target selection: nearest, finish low HP, punish enemies aiming at us, focus-fire with team
+  let target = null, bestScore = -1e9;
+  for (const e of enemies) {
+    const vis = visibleTo(a, e), d = a.pos.distanceTo(e.pos);
+    if (!vis && !(a.cheats.autowall.on && d < 900)) continue;
+    let score = 1 - d / 4000;
+    if (e.hp < 40) score += 0.6;
+    const ef = new THREE.Vector3(-Math.sin(e.yaw), 0, -Math.cos(e.yaw));
+    const toMe = a.pos.clone().sub(e.pos).setY(0);
+    if (toMe.lengthSq() > 1 && ef.dot(toMe.normalize()) > 0.9) score += 0.5;
+    if (!vis) score -= 0.5;
+    for (const m of agents) { if (m !== a && m.team === a.team && m.alive && m.aiTarget === e) { score += 0.3; break; } }
+    if (score > bestScore) { bestScore = score; target = e; }
+  }
 
   if (target) {
+    const bestd = a.pos.distanceTo(target.pos);
     a.aiState = "fight"; a.aiTarget = target;
     const dirTo = target.pos.clone().sub(a.pos);
     a.yaw = Math.atan2(-dirTo.x, -dirTo.z);
-    a.pitch = -Math.asin(THREE.MathUtils.clamp((hitboxCenter(target, a.cheats.aimbot.priority).y - a.eye) / Math.max(1, a.pos.distanceTo(target.pos)), -1, 1));
+    a.pitch = -Math.asin(THREE.MathUtils.clamp((hitboxCenter(target, a.cheats.aimbot.priority).y - a.eye) / Math.max(1, bestd), -1, 1));
     const style = a.persona ? a.persona.style : "peek";
     if (a.aiTimer <= 0) { a.aiStrafe *= -1; a.aiTimer = (style === "rush" ? 0.25 : 0.45) + Math.random() * 0.6; }
     const right = new THREE.Vector3(Math.cos(a.yaw), 0, -Math.sin(a.yaw));
@@ -61,17 +110,14 @@ export function botThink(a, dt) {
     if (style === "passive") desired = right.clone().multiplyScalar(a.aiStrafe * 0.4);
     else if (style === "rush" || style === "rage") desired = bestd > 260 ? dirTo.clone().setY(0).normalize() : right.clone().multiplyScalar(a.aiStrafe);
     else desired = bestd > 520 ? dirTo.clone().setY(0).normalize() : right.clone().multiplyScalar(a.aiStrafe);
-    moveAgent(a, desired, dt, true);
+    // stop-to-shoot: slow right down in engagement range so bloom drops enough to pass the hit-chance gate
+    a.speedScale = ((style === "rush" || style === "rage") && bestd > 300) ? 1 : 0.28;
+    botMove(a, desired, dt, true);
     aimbotFire(a);
   } else {
-    a.aiState = "roam"; a.scoped = false;
+    a.aiState = "roam"; a.aiTarget = null; a.scoped = false;
     if (!a.aiPath.length || a.aiTimer <= 0) { pickGoal(a); a.aiTimer = 2 + Math.random() * 2; }
-    if (a.aiPath.length) {
-      const next = NODES[a.aiPath[0]].p;
-      const toNext = next.clone().sub(a.pos); toNext.y = 0;
-      if (toNext.length() < 80) a.aiPath.shift();
-      else { a.yaw = Math.atan2(-toNext.x, -toNext.z); moveAgent(a, toNext.normalize(), dt, false); }
-    }
+    followPath(a, dt, false);
     const wp = a.weapons[a.cur]; if (wp && wp.ammo <= 2 && wp.reserve > 0 && a.reloadT <= 0) startReload(a);
   }
 }
@@ -84,8 +130,8 @@ export function pickGoal(a) {
     if (a.carrying && RESCUE_ZONES.length) goalNode = nearestNode(new THREE.Vector3(RESCUE_ZONES[0].x, 0, RESCUE_ZONES[0].z));
     else { const h = liveHostages()[0]; goalNode = h ? nearestNode(h.pos) : centerNode(); }
   } else {
-    const h = liveHostages()[0]; goalNode = h ? nearestNode(h.pos) : randomNodeId();
-    if (Math.random() < 0.4) goalNode = randomNodeId();
+    const h = liveHostages()[0];
+    goalNode = (h && Math.random() < 0.5) ? nearestNode(h.pos) : randomNodeId();   // spread T across the map
   }
   a.aiPath = astar(nearestNode(a.pos), goalNode);
 }

@@ -120,12 +120,21 @@ export function nodeDist(a, b) { return NODES[a].p.distanceTo(NODES[b].p); }
 export function nearestNode(pos) { let best = 0, bd = 1e9; for (const n of NODES) { const d = n.p.distanceToSquared(pos); if (d < bd) { bd = d; best = n.id; } } return best; }
 export function astar(start, goal) {
   if (!NODES.length) return [start];
-  const open = new Set([start]), came = {}, g = { [start]: 0 }, f = { [start]: nodeDist(start, goal) };
-  while (open.size) {
-    let cur = -1, cf = 1e9; for (const n of open) if (f[n] < cf) { cf = f[n]; cur = n; }
-    if (cur === goal) { const path = [cur]; while (came[cur] !== undefined) { cur = came[cur]; path.unshift(cur); } return path; }
-    open.delete(cur);
-    for (const nb of (EDGES[cur] || [])) { const t = g[cur] + nodeDist(cur, nb); if (t < (g[nb] ?? 1e9)) { came[nb] = cur; g[nb] = t; f[nb] = t + nodeDist(nb, goal); open.add(nb); } }
+  const n = NODES.length;
+  const g = new Array(n).fill(Infinity), came = new Int32Array(n).fill(-1), closed = new Uint8Array(n);
+  g[start] = 0;
+  const heap = [[nodeDist(start, goal), start]];                          // binary min-heap on f
+  const push = (f, node) => { heap.push([f, node]); let i = heap.length - 1; while (i > 0) { const p = (i - 1) >> 1; if (heap[p][0] <= heap[i][0]) break; const tmp = heap[p]; heap[p] = heap[i]; heap[i] = tmp; i = p; } };
+  const pop = () => { const top = heap[0], last = heap.pop(); if (heap.length) { heap[0] = last; let i = 0; for (;;) { let s = i; const l = 2 * i + 1, r = 2 * i + 2; if (l < heap.length && heap[l][0] < heap[s][0]) s = l; if (r < heap.length && heap[r][0] < heap[s][0]) s = r; if (s === i) break; const tmp = heap[s]; heap[s] = heap[i]; heap[i] = tmp; i = s; } } return top; };
+  while (heap.length) {
+    const cur = pop()[1];
+    if (cur === goal) { const path = [cur]; let c = cur; while (came[c] !== -1) { c = came[c]; path.unshift(c); } return path; }
+    if (closed[cur]) continue; closed[cur] = 1;
+    for (const nb of (EDGES[cur] || [])) {
+      if (closed[nb]) continue;
+      const t = g[cur] + nodeDist(cur, nb);
+      if (t < g[nb]) { came[nb] = cur; g[nb] = t; push(t + nodeDist(nb, goal), nb); }
+    }
   }
   return [start];
 }

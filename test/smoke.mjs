@@ -60,7 +60,7 @@ try {
   // --- default map: start a match and simulate several rounds ---
   HVH.deploy();
   log('✓ deploy() ran — phase:', HVH.GAME.phase, 'agents:', HVH.agents.length);
-  if (HVH.agents.length !== 10) { failures++; log('✗ expected 10 agents'); }
+  if (HVH.agents.length !== 24) { failures++; log('✗ expected 24 agents (12v12)'); }
 
   // nav sanity on default map
   const blocked = HVH.checkNav();
