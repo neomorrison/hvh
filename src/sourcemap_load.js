@@ -32,7 +32,11 @@ export function loadSourceMap(glbBuffer, spawns, texturedScene) {
   // supplied, otherwise a procedural floor/wall/ceiling tint × box-unwrapped detail texture.
   if (texturedScene) {
     texturedScene.scale.setScalar(39.3701);                   // VRF metres → source units; aligns with collision/spawns
-    texturedScene.traverse(o => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; if (o.material) o.material.side = THREE.DoubleSide; } });
+    texturedScene.traverse(o => {
+      if (!o.isMesh) return;
+      o.castShadow = true; o.receiveShadow = true; if (o.material) o.material.side = THREE.DoubleSide;
+      if (/rolling_gate/i.test(o.name || '')) o.visible = false;   // CT-spawn garage is walk-through now → hide its door so it reads as open
+    });
     addMapObject(texturedScene);
   } else {
     const geo = new THREE.BufferGeometry();
@@ -137,34 +141,43 @@ function makeDetailTexture() {
   return tex;
 }
 
-// dusk sky: gradient sky dome + a visible sun glow + a soft cool hemisphere fill. The key
-// (shadow-casting) light is core.js `sun`; here we add the sky itself — previously just a flat
-// dark colour, which is why the map looked like it had no sky or sun.
+// night sky: dark gradient dome with procedural stars + a pale moon + a soft cool fill. cs_office
+// is a snowy night map; the previous flat dark colour read as "no sky", and the warm dusk dome
+// looked like a void. The key (shadow-casting) light is core.js `sun`.
 function setupSky(b) {
-  const horizon = 0x243349;
+  const horizon = 0x16273f;
   scene.background = new THREE.Color(horizon);
-  scene.fog = new THREE.Fog(horizon, 2600, 11000);                 // distant buildings melt into the dusk haze; sky dome stays visible
-  addMapObject(new THREE.HemisphereLight(0x9fb4d6, 0x20242c, 0.4));  // soft sky fill on top of the core sun
+  scene.fog = new THREE.Fog(horizon, 2800, 12000);                  // distant buildings fade into night haze; dome stays visible
+  addMapObject(new THREE.HemisphereLight(0x8aa0c8, 0x1a1f2a, 0.42)); // soft sky fill on top of the core sun
 
-  // gradient dome (inverted sphere). Guarded so the headless THREE stub can skip it.
+  // night dome (inverted sphere) with procedural stars. Guarded so the headless THREE stub skips it.
   if (typeof THREE.ShaderMaterial === 'function' && typeof THREE.SphereGeometry === 'function' && typeof THREE.Mesh === 'function') {
     const mat = new THREE.ShaderMaterial({
       side: THREE.BackSide, depthWrite: false, fog: false,
-      uniforms: { top: { value: new THREE.Color(0x0b1430) }, mid: { value: new THREE.Color(horizon) }, bot: { value: new THREE.Color(0x0e131b) } },
+      uniforms: { top: { value: new THREE.Color(0x070b18) }, mid: { value: new THREE.Color(horizon) }, bot: { value: new THREE.Color(0x05070c) } },
       vertexShader: 'varying vec3 vP; void main(){ vP = position; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }',
-      fragmentShader: 'varying vec3 vP; uniform vec3 top; uniform vec3 mid; uniform vec3 bot; void main(){ float h = normalize(vP).y; vec3 c = h > 0.0 ? mix(mid, top, pow(h,0.55)) : mix(mid, bot, pow(-h,0.5)); gl_FragColor = vec4(c,1.0); }'
+      fragmentShader: [
+        'varying vec3 vP; uniform vec3 top; uniform vec3 mid; uniform vec3 bot;',
+        'float hash(vec3 p){ return fract(sin(dot(floor(p), vec3(127.1,311.7,74.7))) * 43758.5453); }',
+        'void main(){',
+        '  vec3 d = normalize(vP); float h = d.y;',
+        '  vec3 c = h > 0.0 ? mix(mid, top, pow(h, 0.5)) : mix(mid, bot, pow(-h, 0.5));',
+        '  if (h > 0.03) { float s = hash(d * 260.0); float star = smoothstep(0.9975, 1.0, s) * smoothstep(0.03, 0.35, h); c += vec3(0.72,0.8,0.95) * star; }',
+        '  gl_FragColor = vec4(c, 1.0);',
+        '}'
+      ].join('\n')
     });
-    const dome = new THREE.Mesh(new THREE.SphereGeometry(8000, 32, 16), mat); dome.frustumCulled = false; dome.renderOrder = -10; addMapObject(dome);
+    const dome = new THREE.Mesh(new THREE.SphereGeometry(8000, 48, 24), mat); dome.frustumCulled = false; dome.renderOrder = -10; addMapObject(dome);
   }
 
-  // visible sun glow, aligned with the core key-light direction (core.js sun.position).
+  // pale moon, aligned with the core key-light direction (core.js sun.position).
   if (typeof THREE.Sprite === 'function' && typeof THREE.CanvasTexture === 'function' && typeof document !== 'undefined') {
     const cv = document.createElement('canvas'); cv.width = cv.height = 128;
     const ctx = cv.getContext('2d'); const g = ctx.createRadialGradient(64, 64, 0, 64, 64, 64);
-    g.addColorStop(0, 'rgba(255,246,222,1)'); g.addColorStop(0.22, 'rgba(255,228,180,0.8)'); g.addColorStop(1, 'rgba(255,210,150,0)');
+    g.addColorStop(0, 'rgba(240,246,255,1)'); g.addColorStop(0.18, 'rgba(220,232,255,0.95)'); g.addColorStop(0.42, 'rgba(150,175,222,0.22)'); g.addColorStop(1, 'rgba(120,150,210,0)');
     ctx.fillStyle = g; ctx.fillRect(0, 0, 128, 128);
     const spr = new THREE.Sprite(new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(cv), transparent: true, depthWrite: false, fog: false, blending: THREE.AdditiveBlending }));
-    spr.position.copy(new THREE.Vector3(-1200, 2200, 800).normalize().multiplyScalar(7000)); spr.scale.setScalar(1700); addMapObject(spr);
+    spr.position.copy(new THREE.Vector3(-1200, 2200, 800).normalize().multiplyScalar(7000)); spr.scale.setScalar(1400); addMapObject(spr);
   }
 }
 
