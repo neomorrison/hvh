@@ -207,18 +207,22 @@ function onDown(e) {
   const name = viewAt(e.clientX, e.clientY); ed.hover = name;
   if (name === 'persp') {
     if (e.button === 2) { ed.drag = { kind: 'look' }; return; }
-    if (e.button === 0) {
+    if (e.button === 0) {                                                     // EDIT existing brushes (never create new ones from the map)
       const [nx, ny] = ndc('persp', e.clientX, e.clientY); _rc.setFromCamera({ x: nx, y: ny }, ed.persp);
       const bHit = _rc.intersectObjects(ed.group.children, false)[0];
-      const mHit = ed.texturedScene ? _rc.intersectObject(ed.texturedScene, true).filter(h => h.object.visible && h.face)[0] : null;
-      if (bHit && (!mHit || bHit.distance <= mHit.distance)) {                 // hit a brush → select + pull its face
-        pushUndo(); const b = bHit.object.userData.brush; ed.sel = b; const fa = faceAxis(bHit);
-        startFacePull(b, fa.ax, fa.sign, e.clientX, e.clientY); rebuildEdges(); hud(true);
-      } else if (mHit) {                                                       // hit the MAP → make a flush brush and pull it out
-        pushUndo(); const made = makeFaceBrush(mHit);
-        if (made) { ed.sel = made.b; startFacePull(made.b, made.ax, made.sign, e.clientX, e.clientY); rebuild(); hud(true); }
-        else { ed.sel = null; rebuildEdges(); }
-      } else { ed.sel = null; rebuildEdges(); hud(true); }
+      if (!bHit) { ed.sel = null; rebuildEdges(); hud(true); return; }         // clicked the map / empty → just deselect
+      pushUndo(); const b = bHit.object.userData.brush; ed.sel = b;
+      const fa = faceAxis(bHit), ax = fa.ax, u = (ax + 1) % 3, v = (ax + 2) % 3, P = bHit.point;
+      const fu = (P.getComponent(u) - b.min[u]) / Math.max(1, b.max[u] - b.min[u]);
+      const fv = (P.getComponent(v) - b.min[v]) / Math.max(1, b.max[v] - b.min[v]);
+      const m = 0.28, du = Math.min(fu, 1 - fu), dv = Math.min(fv, 1 - fv);
+      if (du < m || dv < m) {   // grabbed near an edge → RESIZE: drag the nearest side face in/out
+        const ra = du <= dv ? u : v, rs = (du <= dv ? fu : fv) < 0.5 ? -1 : 1;
+        startFacePull(b, ra, rs, e.clientX, e.clientY);
+      } else {                  // grabbed the middle → MOVE the brush along the face you grabbed
+        ed.drag = { kind: 'move3d', b, ax, P: P.clone(), min0: b.min.slice(), max0: b.max.slice() };
+      }
+      rebuildEdges(); hud(true);
     }
     return;
   }
@@ -241,6 +245,12 @@ function onMove(e) {
     else d.b.min[d.ax] = Math.min(d.b.max[d.ax] - GRID(), d.start - amount);
     rebuild(); return;
   }
+  if (d.kind === 'move3d') {   // slide the whole brush along the grabbed face's plane, following the cursor
+    const Q = rayPlaneOnAxis(e.clientX, e.clientY, d.ax, d.P.getComponent(d.ax)); if (!Q) return;
+    const u = (d.ax + 1) % 3, vv = (d.ax + 2) % 3, du = snap(Q.getComponent(u) - d.P.getComponent(u)), dv = snap(Q.getComponent(vv) - d.P.getComponent(vv));
+    d.b.min[u] = d.min0[u] + du; d.b.max[u] = d.max0[u] + du; d.b.min[vv] = d.min0[vv] + dv; d.b.max[vv] = d.max0[vv] + dv;
+    rebuild(); return;
+  }
   const v = ed.ov[d.name];
   if (d.kind === 'pan') { const w0 = worldUV(d.name, d.sx, d.sy, d.cu0, d.cv0), w1 = worldUV(d.name, e.clientX, e.clientY, d.cu0, d.cv0); v.cu = d.cu0 - (w1.u - w0.u); v.cv = d.cv0 - (w1.v - w0.v); return; }
   const w = worldUV(d.name, e.clientX, e.clientY, v.cu, v.cv), [ua, va] = AX[d.name], ui = IDX[ua], vi = IDX[va];
@@ -260,7 +270,7 @@ function onUp(e) {
       ed.brushes.push(b); ed.sel = b;
     }
     rebuild(); hud(true);
-  } else if (d.kind === 'move' || d.kind === 'resize' || d.kind === 'facepull') { ed.depth = { x: (d.b.min[0] + d.b.max[0]) / 2, y: (d.b.min[1] + d.b.max[1]) / 2, z: (d.b.min[2] + d.b.max[2]) / 2 }; hud(true); }
+  } else if (d.kind === 'move' || d.kind === 'resize' || d.kind === 'facepull' || d.kind === 'move3d') { ed.depth = { x: (d.b.min[0] + d.b.max[0]) / 2, y: (d.b.min[1] + d.b.max[1]) / 2, z: (d.b.min[2] + d.b.max[2]) / 2 }; hud(true); }
 }
 function onWheel(e) {
   const name = viewAt(e.clientX, e.clientY); e.preventDefault();
@@ -282,51 +292,23 @@ function selectPersp(mx, my) {
   ed.sel = hit ? hit.object.userData.brush : null; rebuildEdges(); hud(true);
 }
 
-/* ---- 3D FACE EDITING: click a surface, drag it out along its normal to extend/patch ---- */
+/* ---- 3D EDITING: drag an existing brush to move it / drag a face edge to resize it ---- */
 function projectToPane(w) { const v = w.clone().project(ed.persp); return [(v.x * 0.5 + 0.5) * (innerWidth / 2), (1 - (v.y * 0.5 + 0.5)) * (innerHeight / 2)]; }
+// where the cursor ray crosses the plane (axis = planeVal), for sliding a brush in 3D
+function rayPlaneOnAxis(mx, my, ax, planeVal) {
+  const [nx, ny] = ndc('persp', mx, my); _rc.setFromCamera({ x: nx, y: ny }, ed.persp);
+  const o = _rc.ray.origin, dr = _rc.ray.direction, da = dr.getComponent(ax);
+  if (Math.abs(da) < 1e-6) return null;
+  const t = (planeVal - o.getComponent(ax)) / da; if (t < 0) return null;
+  return o.clone().addScaledVector(dr, t);
+}
 // which world axis (and outward sign) the hit face points along, and whether it's axis-aligned enough for an AABB brush
 function faceAxis(hit) {
   const n = (hit.face ? hit.face.normal.clone() : new THREE.Vector3(0, 1, 0)).transformDirection(hit.object.matrixWorld).normalize();
   const ax = (Math.abs(n.x) >= Math.abs(n.y) && Math.abs(n.x) >= Math.abs(n.z)) ? 0 : (Math.abs(n.y) >= Math.abs(n.z) ? 1 : 2);
   return { ax, sign: n.getComponent(ax) < 0 ? -1 : 1, aligned: Math.abs(n.getComponent(ax)) > 0.9 };
 }
-// flood the coplanar triangles of the hit mesh near the hit point → the wall face's world rectangle
-function coplanarFaceRect(hit) {
-  const fa = faceAxis(hit); if (!fa.aligned) return null;
-  const geo = hit.object.geometry, pos = geo.attributes && geo.attributes.position; if (!pos) return null;
-  const index = geo.index, triCount = index ? index.count / 3 : pos.count / 3; if (triCount > 150000) return null;
-  const ax = fa.ax, u = (ax + 1) % 3, v = (ax + 2) % 3, planeD = hit.point.getComponent(ax), M = hit.object.matrixWorld;
-  const hu = hit.point.getComponent(u), hv = hit.point.getComponent(v), R = 1600;   // keep the face LOCAL (don't merge the whole floor)
-  const a = new THREE.Vector3(), b = new THREE.Vector3(), c = new THREE.Vector3(), e1 = new THREE.Vector3(), e2 = new THREE.Vector3(), tn = new THREE.Vector3();
-  const gi = (t, k) => index ? index.getX(t * 3 + k) : t * 3 + k;
-  let minU = 1e9, maxU = -1e9, minV = 1e9, maxV = -1e9, found = 0;
-  for (let t = 0; t < triCount; t++) {
-    a.fromBufferAttribute(pos, gi(t, 0)).applyMatrix4(M); b.fromBufferAttribute(pos, gi(t, 1)).applyMatrix4(M); c.fromBufferAttribute(pos, gi(t, 2)).applyMatrix4(M);
-    e1.subVectors(b, a); e2.subVectors(c, a); tn.crossVectors(e1, e2).normalize();
-    if (Math.abs(tn.getComponent(ax)) < 0.9) continue;                                   // not parallel to our face
-    if (Math.abs((a.getComponent(ax) + b.getComponent(ax) + c.getComponent(ax)) / 3 - planeD) > 6) continue;   // not coplanar
-    const cu = (a.getComponent(u) + b.getComponent(u) + c.getComponent(u)) / 3, cv = (a.getComponent(v) + b.getComponent(v) + c.getComponent(v)) / 3;
-    if (Math.abs(cu - hu) > R || Math.abs(cv - hv) > R) continue;                         // too far from the click
-    for (const p of [a, b, c]) { const pu = p.getComponent(u), pv = p.getComponent(v); if (pu < minU) minU = pu; if (pu > maxU) maxU = pu; if (pv < minV) minV = pv; if (pv > maxV) maxV = pv; }
-    found++;
-  }
-  return found ? { ax, sign: fa.sign, planeD, u, v, minU, maxU, minV, maxV } : null;
-}
-// create a thin brush flush with a map face (matching its coplanar rectangle), ready to be pulled out
-function makeFaceBrush(hit) {
-  const r = coplanarFaceRect(hit), fa = faceAxis(hit);
-  if (!fa.aligned) { showHint('Angled face — AABB brushes only; use the 2D panes'); return null; }
-  const ax = fa.ax, sign = fa.sign, u = (ax + 1) % 3, v = (ax + 2) % 3, P = hit.point, g = GRID();
-  const b = { min: [0, 0, 0], max: [0, 0, 0], mats: Array(6).fill(ed.paint), type: 'solid' };
-  if (r) { b.min[u] = snap(r.minU); b.max[u] = snap(r.maxU); b.min[v] = snap(r.minV); b.max[v] = snap(r.maxV); }
-  else { b.min[u] = snap(P.getComponent(u) - 96); b.max[u] = snap(P.getComponent(u) + 96); b.min[v] = snap(P.getComponent(v) - 96); b.max[v] = snap(P.getComponent(v) + 96); }
-  if (b.max[u] - b.min[u] < g) b.max[u] = b.min[u] + g;
-  if (b.max[v] - b.min[v] < g) b.max[v] = b.min[v] + g;
-  const d0 = snap((r ? r.planeD : P.getComponent(ax)));
-  if (sign > 0) { b.max[ax] = d0; b.min[ax] = d0 - g; } else { b.min[ax] = d0; b.max[ax] = d0 + g; }   // thin slab flush to the wall
-  ed.brushes.push(b); return { b, ax, sign };
-}
-// begin dragging a face (of a brush, or a freshly-made map-face brush) outward along its normal
+// begin dragging a brush face outward/inward along its normal (resize)
 function startFacePull(b, ax, sign, mx, my) {
   const start = sign > 0 ? b.max[ax] : b.min[ax];
   const C = new THREE.Vector3((b.min[0] + b.max[0]) / 2, (b.min[1] + b.max[1]) / 2, (b.min[2] + b.max[2]) / 2); C.setComponent(ax, start);
@@ -373,6 +355,6 @@ function hud(show) {
   _hud.style.display = 'block';
   const sw = k => '<span style="display:inline-block;width:9px;height:9px;border-radius:2px;vertical-align:middle;background:' + (k === 'nodraw' ? 'transparent;border:1px solid #889' : '#' + (MAT_DEF[k] ? MAT_DEF[k][0].toString(16).padStart(6, '0') : '888')) + '"></span>';
   _hud.innerHTML = '<b style="color:#ffd54a">🛠 BRUSH EDITOR</b> &nbsp;<span style="opacity:.85">2D pane:</span> drag=new brush · drag body=move · drag edge=stretch · RMB=pan · wheel=zoom &nbsp;|&nbsp; '
-    + '<span style="opacity:.85">3D:</span> WASD/RF fly · RMB look · <b>drag a wall/face = pull it out to extend</b> &nbsp;|&nbsp; <b>1-7</b> material · <b>T</b> clip · <b>C</b> dup · <b>X</b> del · <b>Z</b> undo · <b>[ ]</b> depth · <b>G</b> grid ' + GRID() + ' · <b>H</b> hide · <b>P</b> save · <b>M</b> export · <b>~</b> exit'
+    + '<span style="opacity:.85">3D:</span> WASD/RF fly · RMB look · <b>drag a brush = move · drag its edge = resize</b> &nbsp;|&nbsp; <b>1-7</b> material · <b>T</b> clip · <b>C</b> dup · <b>X</b> del · <b>Z</b> undo · <b>[ ]</b> depth · <b>G</b> grid ' + GRID() + ' · <b>H</b> hide · <b>P</b> save · <b>M</b> export · <b>~</b> exit'
     + '<br>paint ' + sw(ed.paint) + ' ' + ed.paint + ' · depth ' + Math.round(ed.depth.x) + ',' + Math.round(ed.depth.y) + ',' + Math.round(ed.depth.z) + ' · brushes <b>' + ed.brushes.length + '</b>' + (ed.sel ? ' · <span style="color:#ffd54a">selected ' + ed.sel.type + '</span>' : '');
 }
