@@ -25,7 +25,6 @@ export function botBuy(a) {
   if (buy && a.money >= cost(buy)) { giveWeapon(a, buy); a.money -= cost(buy); }
   // grenades with whatever's left — one of each
   if (a.money >= 300 && !(a.nades.he > 0)) { a.nades.he = 1; a.money -= 300; a.curNade = a.curNade || "he"; }
-  if (a.money >= 200 && !(a.nades.flash > 0) && Math.random() < 0.6) { a.nades.flash = 1; a.money -= 200; }
   if (a.money >= 300 && !(a.nades.smoke > 0) && Math.random() < 0.45) { a.nades.smoke = 1; a.money -= 300; }
 }
 

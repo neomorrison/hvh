@@ -5,7 +5,7 @@
 export const TEAM = { CT: "CT", T: "T" };
 
 export const ECON = {
-  start: 1400, max: 16000,                        // boosted so a rifle + armor is reachable quickly
+  start: 800, max: 16000,                         // round 1 is a classic $800 pistol round; the boosted win/loss rewards below carry the rest
   win: { ct_rescue: 3400, ct_elim: 3500, t_elim: 3500, t_time: 3500 },
   lossLadder: [2400, 2900, 3400, 3400, 3400],     // index = consecutiveLosses-1, capped — generous so nobody is stuck on pistols
   killReward: 300,
@@ -51,7 +51,6 @@ export const LAND_RECOVER = 360;    // units shed per second after landing (~0.3
 
 export const NADES = {
   he:    { name: "HE Grenade", cost: 300, kind: "he" },
-  flash: { name: "Flashbang",  cost: 200, kind: "flash" },
   smoke: { name: "Smoke",      cost: 300, kind: "smoke" },
   molly: { name: "Molotov",    cost: 400, kind: "fire", side: "T" },
   inc:   { name: "Incendiary", cost: 600, kind: "fire", side: "CT" },

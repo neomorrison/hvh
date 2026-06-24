@@ -243,25 +243,22 @@ export function manualFire(a) {
     if (t === a || !t.alive || t.team === a.team) continue;
     for (const hb of hitboxes(t)) { const r = rayAABB(origin, dir, hb); if (r !== null && r < bd) { bd = r; best = t; bg = hb.group; } }
   }
-  // nearest opaque blocking wall
+  // first solid wall along the ray — from the MESH hull (cs_office) or procedural WALLS. Used for
+  // tracer-stop + miss impacts; the damage gate is penetrate() below, same as the aimbot.
   let wallDist = 9000;
-  for (const wl of WALLS) { if (!wl.block || wl.mat < 0.4) continue; const r = segAABB(origin, dir, 9000, wl); if (r && r.enter > 1 && r.enter < wallDist) wallDist = r.enter; }
+  if (meshBackend.active && meshBackend.bvh) { const h = meshBackend.bvh.raycast(origin.x, origin.y, origin.z, dir.x, dir.y, dir.z, 9000); if (h) wallDist = h.t; }
+  else for (const wl of WALLS) { if (!wl.block || wl.mat < 0.4) continue; const r = segAABB(origin, dir, 9000, wl); if (r && r.enter > 1 && r.enter < wallDist) wallDist = r.enter; }
   const tracerStart = origin.clone().add(dir.clone().multiplyScalar(40));
   if (best) {
     const hitPt = hitboxCenter(best, bg);
     const dist = origin.distanceTo(hitPt);
-    if (bd <= wallDist) {                                    // clean line — nothing in front
-      addTracer(tracerStart, origin.clone().add(dir.clone().multiplyScalar(bd)));
-      applyHit(a, best, bg, dist, { factor: 1, surfaces: 0, blocked: false });
-      return;
-    }
-    const through = penetrate(origin, hitPt, a.cur);         // wall(s) between us and target
+    const through = penetrate(origin, hitPt, a.cur);         // wall(s) between us and target — limited exactly like the aimbot (no more shooting through the whole map)
     if (through.factor > 0 && !through.blocked) {
       addTracer(tracerStart, origin.clone().add(dir.clone().multiplyScalar(bd)));
-      applyHit(a, best, bg, dist, through);                 // wallbang with reduced damage
+      applyHit(a, best, bg, dist, through);                 // clean (factor 1) or wallbang (reduced)
       return;
     }
-    const wp = origin.clone().add(dir.clone().multiplyScalar(wallDist));   // too thick → bullet stops at wall
+    const wp = origin.clone().add(dir.clone().multiplyScalar(Math.min(wallDist, bd)));   // too thick → bullet stops at wall
     addTracer(tracerStart, wp); addImpact(wp);
     if (a.isHuman) addHitLog("blocked — wall too thick", "inacc");
     return;
@@ -310,7 +307,7 @@ export function aimbotFire(a) {
 export function meleeAttack(a, stab) {
   if (a.fireCd > 0) return false;
   const w = WEAPONS.knife; a.fireCd = stab ? w.stabCd : w.slashCd; a.lastShot = performance.now();
-  sfxKnife(a, false);   // swing
+  if (a.isHuman) sfxKnife(a, false);   // local swing only — bots stay silent unless they connect (no out-of-range swing loop)
   const fwd = new THREE.Vector3(-Math.sin(a.yaw), 0, -Math.cos(a.yaw));
   const me = eyePos(a); let best = null, bd = w.knifeRange;
   for (const t of agents) {
@@ -344,7 +341,7 @@ export function giveWeapon(a, key) {
   selectBest(a);
 }
 export function selectBest(a) { a.cur = a.slotPrimary || a.slotSecondary; a.scoped = false; if (a.isHuman) { a.equippedNade = null; setViewmodel(a.cur, false); } }
-export function switchTo(a, key) { if (a.weapons[key]) { a.cur = key; a.scoped = false; a.reloadT = 0; if (a.isHuman) { a.equippedNade = null; setViewmodel(key, false); sfxDraw(a); } updateHUDWeapons(); } }
+export function switchTo(a, key) { if (a.weapons[key]) { a.cur = key; a.scoped = false; a.reloadT = 0; if (a.isHuman) { a.equippedNade = null; setViewmodel(key, false); } updateHUDWeapons(); } }
 export function startReload(a) {
   if (a.reloadT > 0) return;
   const w = WEAPONS[a.cur]; if (!w || w.melee) return;

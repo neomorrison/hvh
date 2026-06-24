@@ -243,10 +243,14 @@ function rayTri(ox, oy, oz, dx, dy, dz, T, b, maxT) {
 export const meshBackend = {
   active: false, bvh: null, clipBvh: null, bounds: null,
   windowBvh: null, windowPanes: [], windowTriPane: null, onWindowBreak: null,
+  patchBvh: null, patchClipBvh: null,                    // user map-patches: solid (blocks all) + nodraw clip (movement only)
   losClear(a, b) {
     if (!this.bvh) return true;
     const dx = b.x - a.x, dy = b.y - a.y, dz = b.z - a.z; const len = Math.hypot(dx, dy, dz); if (len < 1) return true;
-    return !this.bvh.anyHit(a.x, a.y, a.z, dx / len, dy / len, dz / len, len - 1);
+    const ux = dx / len, uy = dy / len, uz = dz / len;
+    if (this.bvh.anyHit(a.x, a.y, a.z, ux, uy, uz, len - 1)) return false;
+    if (this.patchBvh && this.patchBvh.anyHit(a.x, a.y, a.z, ux, uy, uz, len - 1)) return false;
+    return true;
   },
   // residual damage multiplier through walls.  Winding-independent: the ray starts
   // in open air, so consecutive surface crossings alternate solid/air — each pair is
@@ -258,6 +262,7 @@ export const meshBackend = {
     if (len < 1) return { factor: 1, surfaces: 0, blocked: false };
     const ux = dx / len, uy = dy / len, uz = dz / len;
     const hits = this.bvh.collect(o.x, o.y, o.z, ux, uy, uz, len - 0.5);
+    if (this.patchBvh) { for (const h of this.patchBvh.collect(o.x, o.y, o.z, ux, uy, uz, len - 0.5)) hits.push(h); hits.sort((p, q) => p.t - q.t); }
     if (!hits.length) return { factor: 1, surfaces: 0, blocked: false };
     const ts = [];                                         // merge coincident faces (shared edges / flush walls)
     for (const h of hits) if (!ts.length || h.t - ts[ts.length - 1] > 1.0) ts.push(h.t);
@@ -279,7 +284,8 @@ export const meshBackend = {
   groundHeight(x, z, fromY, reach = 18) {
     if (!this.bvh) return -Infinity;
     const top = fromY + reach;
-    const h = this.bvh.raycast(x, top, z, 0, -1, 0, 4000);
+    let h = this.bvh.raycast(x, top, z, 0, -1, 0, 4000);
+    if (this.patchBvh) { const p = this.patchBvh.raycast(x, top, z, 0, -1, 0, 4000); if (p && (!h || p.t < h.t)) h = p; }   // patches fill floor holes
     return h ? top - h.t : -Infinity;
   },
   // horizontal collide+slide from (px,pz)→(nx,nz), keeping `radius` off walls. Casts at body
@@ -295,6 +301,8 @@ export const meshBackend = {
         let h = this.bvh.raycast(sx, hy, sz, ux, 0, uz, maxd);
         if (this.clipBvh) { const c = this.clipBvh.raycast(sx, hy, sz, ux, 0, uz, maxd); if (c && (!h || c.t < h.t)) h = c; }
         if (this.windowBvh) { const w = this.windowBvh.raycast(sx, hy, sz, ux, 0, uz, maxd); if (w && (!h || w.t < h.t)) h = w; }
+        if (this.patchBvh) { const p = this.patchBvh.raycast(sx, hy, sz, ux, 0, uz, maxd); if (p && (!h || p.t < h.t)) h = p; }
+        if (this.patchClipBvh) { const p = this.patchClipBvh.raycast(sx, hy, sz, ux, 0, uz, maxd); if (p && (!h || p.t < h.t)) h = p; }
         if (h && (!best || h.t < best.t)) best = h;
       }
       return best;
@@ -327,6 +335,8 @@ export const meshBackend = {
         let h = this.bvh.raycast(x, hy, z, ux, 0, uz, radius);
         if (this.clipBvh) { const c = this.clipBvh.raycast(x, hy, z, ux, 0, uz, radius); if (c && (!h || c.t < h.t)) h = c; }
         if (this.windowBvh) { const w = this.windowBvh.raycast(x, hy, z, ux, 0, uz, radius); if (w && (!h || w.t < h.t)) h = w; }
+        if (this.patchBvh) { const p = this.patchBvh.raycast(x, hy, z, ux, 0, uz, radius); if (p && (!h || p.t < h.t)) h = p; }
+        if (this.patchClipBvh) { const p = this.patchClipBvh.raycast(x, hy, z, ux, 0, uz, radius); if (p && (!h || p.t < h.t)) h = p; }
         if (h && (!best || h.t < best.t)) best = h;
       }
       return best;
@@ -357,8 +367,29 @@ export const meshBackend = {
     if (this.onWindowBreak) this.onWindowBreak(pane);
     return pane;
   },
-  clear() { this.active = false; this.bvh = null; this.clipBvh = null; this.bounds = null; this.windowBvh = null; this.windowPanes = []; this.windowTriPane = null; },
+  // rebuild the user-patch collision from a list of boxes {x,y,z,w,h,d,type:'solid'|'clip'}.
+  // solid = blocks movement+sight+bullets (+ fills floor holes); clip = invisible movement boundary.
+  setPatches(boxes) {
+    const solid = [], clip = [];
+    for (const b of (boxes || [])) { const t = boxTris(b.x, b.y, b.z, b.w, b.h, b.d); (b.type === 'clip' ? clip : solid).push(...t); }
+    this.patchBvh = solid.length ? new TriBVH(new Float32Array(solid)) : null;
+    this.patchClipBvh = clip.length ? new TriBVH(new Float32Array(clip)) : null;
+  },
+  clear() { this.active = false; this.bvh = null; this.clipBvh = null; this.bounds = null; this.windowBvh = null; this.windowPanes = []; this.windowTriPane = null; this.patchBvh = null; this.patchClipBvh = null; },
 };
+
+// 12-triangle axis-aligned box (outward-facing) centred at (cx,cy,cz) with full sizes w,h,d.
+export function boxTris(cx, cy, cz, w, h, d) {
+  const x0 = cx - w / 2, x1 = cx + w / 2, y0 = cy - h / 2, y1 = cy + h / 2, z0 = cz - d / 2, z1 = cz + d / 2, o = [];
+  const quad = (a, b, c, e) => { o.push(...a, ...b, ...c, ...a, ...c, ...e); };
+  quad([x0, y1, z1], [x1, y1, z1], [x1, y1, z0], [x0, y1, z0]);   // +y top
+  quad([x0, y0, z0], [x1, y0, z0], [x1, y0, z1], [x0, y0, z1]);   // -y bottom
+  quad([x0, y0, z1], [x1, y0, z1], [x1, y1, z1], [x0, y1, z1]);   // +z
+  quad([x1, y0, z0], [x0, y0, z0], [x0, y1, z0], [x1, y1, z0]);   // -z
+  quad([x1, y0, z1], [x1, y0, z0], [x1, y1, z0], [x1, y1, z1]);   // +x
+  quad([x0, y0, z0], [x0, y0, z1], [x0, y1, z1], [x0, y1, z0]);   // -x
+  return o;
+}
 
 /* ---------------- spawn / entity conversion (Source Z-up → game Y-up) ---------------- */
 // VRF exports glTF already rotated Z-up→Y-up as (x, z, -y); apply the SAME to raw entity origins.
