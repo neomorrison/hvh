@@ -43,6 +43,17 @@ function specUpdate() {
   if (keys["KeyA"]) spec.pos.addScaledVector(right, -sp);
   if (keys["KeyD"]) spec.pos.addScaledVector(right, sp);
 }
+let _specBanner = null;
+function updateSpecBanner() {
+  if (!_specBanner) { _specBanner = document.createElement('div'); _specBanner.id = 'specBanner'; _specBanner.style.cssText = 'position:fixed;left:0;right:0;bottom:84px;text-align:center;font:bold 17px "Trebuchet MS",sans-serif;color:#fff;text-shadow:0 2px 6px #000,0 0 2px #000;pointer-events:none;z-index:50;'; document.body.appendChild(_specBanner); }
+  const h = refs.human;
+  if (h && !h.alive && GAME.phase !== "warmup") {
+    if (spec.free) _specBanner.innerHTML = '<span style="opacity:.85">◉ FREE CAMERA</span> &nbsp;·&nbsp; <span style="font-weight:normal;opacity:.7">WASD fly · Space to lock onto a player</span>';
+    else if (spec.target) _specBanner.innerHTML = 'Spectating <span style="color:' + (spec.target.team === TEAM.CT ? '#7fb4ff' : '#ffb46a') + '">' + spec.target.name + '</span>' + (spec.tp ? ' <span style="opacity:.7">(3rd person)</span>' : '') + ' &nbsp;<span style="font-weight:normal;opacity:.6">click=switch · V=3rd person · Space=free cam</span>';
+    else _specBanner.textContent = '';
+    _specBanner.style.display = 'block';
+  } else _specBanner.style.display = 'none';
+}
 
 /* ============================== input ============================== */
 addEventListener('keydown', e => {
@@ -238,7 +249,7 @@ export function step(dt) {
   }
   updateHostages(dt); updateNades(dt); updateAreas(dt); updateEffects(dt);
   for (const a of agents) updateAgentVisual(a);
-  updateESP(); updateReloadRing(); updateBloomRing(); updateScopeOverlay(); updateR8Hammer();
+  updateESP(); updateReloadRing(); updateBloomRing(); updateScopeOverlay(); updateR8Hammer(); updateSpecBanner();
   updateCamera();
   updateTopHUD(); updatePlayerHUD(); updateBotBars(); updateHUDWeapons();
   $("#roundTimer").textContent = formatTime(GAME.phase === "buy" ? GAME.freeze : GAME.timer);

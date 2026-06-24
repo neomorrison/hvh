@@ -44,8 +44,13 @@ export function makeBody(team, isHuman) {
   armR.add(box(5, 6, 11, 11, 44, 11, skin));
   const upper = new THREE.Group();
   [chest, belly, vest, neck, head, helmet, face, armL, armR].forEach(o => upper.add(o));
+  // Pivot the torso at the WAIST, not the feet: shift every child down by WAIST and lift the group
+  // back up. Otherwise anti-aim's yaw+pitch rotate the torso around the feet (lever ~55u) and it
+  // visibly swings sideways off the legs instead of leaning.
+  const WAIST = 44;
+  upper.children.forEach(c => c.position.y -= WAIST);
   g.add(upper); g.add(legs);
-  const holder = new THREE.Group(); holder.position.set(10, 46, 14); upper.add(holder);
+  const holder = new THREE.Group(); holder.position.set(10, 46 - WAIST, 14); upper.add(holder);
   return { g, upper, head, chest, belly, legs, holder, weapon: null };
 }
 
@@ -212,7 +217,7 @@ export function updateAgentVisual(a) {
   a.body.upper.rotation.y = upperYaw;
   const aimP = aa.on ? (aa.pitch === "down" ? 0.5 : aa.pitch === "up" ? -0.5 : 0) : 0;
   a.body.upper.rotation.x = aimP * 0.4;
-  const sc = a.crouch ? 0.72 : 1; a.body.upper.position.y = a.crouch ? -12 : 0; a.body.legs.scale.y = sc;
+  const sc = a.crouch ? 0.72 : 1; a.body.upper.position.y = a.crouch ? 44 - 12 : 44; a.body.legs.scale.y = sc;   // 44 = waist pivot (see body build)
   if (a._wmKey !== a.cur) {
     a._wmKey = a.cur;
     if (a.body.weapon) a.body.holder.remove(a.body.weapon);

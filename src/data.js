@@ -5,9 +5,9 @@
 export const TEAM = { CT: "CT", T: "T" };
 
 export const ECON = {
-  start: 800, max: 16000,
-  win: { ct_rescue: 2900, ct_elim: 3000, t_elim: 3000, t_time: 3250 },
-  lossLadder: [1400, 1900, 2400, 2900, 3400],   // index = consecutiveLosses-1, capped
+  start: 1400, max: 16000,                        // boosted so a rifle + armor is reachable quickly
+  win: { ct_rescue: 3400, ct_elim: 3500, t_elim: 3500, t_time: 3500 },
+  lossLadder: [2400, 2900, 3400, 3400, 3400],     // index = consecutiveLosses-1, capped — generous so nobody is stuck on pistols
   killReward: 300,
   hostage: { rescuerBonus: 1000, teamBonus: 600, damagePenalty: -30, killPenalty: -1000 },
 };
@@ -16,9 +16,9 @@ export const HITGROUP = { head: 4.0, chest: 1.0, arms: 1.0, stomach: 1.25, legs:
 
 // armorPen given as community percent; flArmorRatio = pct/100 (see spec §3.5)
 export const WEAPONS = {
-  glock:  { name: "Glock-18",      slot: 1, side: "T",   cost: 200,  dmg: 30, penPct: 47,   rpm: 400, mag: 20, reserve: 60, reload: 2.17, run: 240, range: 0.85, kill: 300, auto: true,  mode: "burst" },
-  usp:    { name: "USP-S",         slot: 1, side: "CT",  cost: 200,  dmg: 35, penPct: 50.5, rpm: 352, mag: 12, reserve: 24, reload: 2.17, run: 240, range: 0.99, kill: 300, auto: false },
-  duals:  { name: "Dual Berettas", slot: 1, side: "both",cost: 300,  dmg: 35, penPct: 57.5, rpm: 500, mag: 30, reserve: 60, reload: 3.8,  run: 240, range: 0.75, kill: 300, auto: true },
+  glock:  { name: "Glock-18",      slot: 1, side: "T",   cost: 200,  dmg: 30, penPct: 47,   rpm: 300, mag: 20, reserve: 60, reload: 2.17, run: 240, range: 0.85, kill: 300, auto: false, mode: "burst" },
+  usp:    { name: "USP-S",         slot: 1, side: "CT",  cost: 200,  dmg: 35, penPct: 50.5, rpm: 300, mag: 12, reserve: 24, reload: 2.17, run: 240, range: 0.99, kill: 300, auto: false },
+  duals:  { name: "Dual Berettas", slot: 1, side: "both",cost: 300,  dmg: 35, penPct: 57.5, rpm: 400, mag: 30, reserve: 60, reload: 3.8,  run: 240, range: 0.75, kill: 300, auto: false },
   deagle: { name: "Desert Eagle",  slot: 1, side: "both",cost: 700,  dmg: 63, penPct: 93.2, rpm: 267, mag: 7,  reserve: 21, reload: 2.2,  run: 230, range: 0.94, kill: 300, auto: false },
   // R8 Revolver — CS2 primary is a slow, deliberate hammer-cock shot; the fan
   // (alt-fire) is faster but inaccurate.  cockTime/cycle govern the real time
@@ -35,9 +35,9 @@ export const WEAPONS = {
 export const INACC = {
   deagle: { stand: 6.2,  crouch: 4.18, run: 54.3,   fire: 21, max: 85,   recov: 0.40 },
   r8:     { stand: 2.52, crouch: 1.52, run: 9.02,   fire: 6,  max: 18.6, recov: 0.40 },
-  duals:  { stand: 9.0,  crouch: 7.25, run: 26.85,  fire: 6.8,max: 60,   recov: 0.30 },
-  usp:    { stand: 6.4,  crouch: 5.18, run: 20.27,  fire: 5.8,max: 45,   recov: 0.33 },
-  glock:  { stand: 7.6,  crouch: 6.2,  run: 17.6,   fire: 6.5,max: 45,   recov: 0.30 },
+  duals:  { stand: 9.0,  crouch: 7.25, run: 26.85,  fire: 12, max: 66,   recov: 0.40 },
+  usp:    { stand: 6.4,  crouch: 5.18, run: 20.27,  fire: 13, max: 56,   recov: 0.44 },
+  glock:  { stand: 7.6,  crouch: 6.2,  run: 17.6,   fire: 13, max: 56,   recov: 0.42 },
   ssg:    { stand: 3.23, crouch: 3.03, run: 155.43, fire: 0,  max: 10,   recov: 0.50, scopedStill: 0.35, unscoped: 48 },
   scar:   { stand: 2.3,  crouch: 1.8,  run: 176.58, fire: 3,  max: 30,   recov: 0.45, scopedStill: 0.35, unscoped: 62 },
   g3:     { stand: 2.3,  crouch: 1.8,  run: 176.58, fire: 3,  max: 30,   recov: 0.45, scopedStill: 0.35, unscoped: 62 },
