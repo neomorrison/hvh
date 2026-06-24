@@ -136,6 +136,7 @@ function humanMove(dt) {
     human.bhopBoost = human._landedThisFrame ? Math.min(BHOP_MAX, (human.bhopBoost || 1) + BHOP_GAIN) : Math.max(1, human.bhopBoost || 1);
   }
   if (human.onGround && !keys["Space"]) human.bhopBoost = 1;   // grounded without immediately re-jumping → lose the chain
+  if (human.crouch) human.bhopBoost = 1;                       // crouching kills the bhop speed (CS: can't crouch-bhop fast)
   human.realYaw = human.yaw;
   human.speedScale = 1;
   const c = human.cheats;
