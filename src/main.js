@@ -309,6 +309,7 @@ export function step(dt, extra) {
 function updateCamera() {
   const human = refs.human;
   if (human.alive) {
+    vm._specKey = null;   // alive: viewmodel belongs to us again — force a re-sync the next time we spectate
     setListener(human.pos.x, human.eye, human.pos.z, human.yaw, human);
     const scopedNow = human.scoped && WEAPONS[human.cur] && WEAPONS[human.cur].scope;
     const tp = GAME.thirdPerson;
@@ -352,7 +353,13 @@ function updateCamera() {
           let ux = Math.sin(t.yaw) * cp, uy = -Math.sin(t.pitch) + 0.18, uz = Math.cos(t.yaw) * cp; const vl = Math.hypot(ux, uy, uz); ux /= vl; uy /= vl; uz /= vl;
           let allow = dist; if (meshBackend.active && meshBackend.bvh) { const h = meshBackend.bvh.raycast(ex, ey, ez, ux, uy, uz, dist); if (h) allow = Math.max(18, h.t - 12); }
           camera.position.set(ex + ux * allow, ey + uy * allow, ez + uz * allow); camera.rotation.set(t.pitch, t.yaw, 0, 'YXZ');
-        } else { camera.position.set(t.pos.x, t.eye, t.pos.z); camera.rotation.set(t.pitch, t.yaw, 0, 'YXZ'); }
+        } else {                                             // FIRST-PERSON spectate: show the spectated player's gun
+          camera.position.set(t.pos.x, t.eye, t.pos.z); camera.rotation.set(t.pitch, t.yaw, 0, 'YXZ');
+          const wkey = t.equippedNade || t.cur;              // rebuild the viewmodel only when their weapon changes
+          if (wkey && wkey !== vm._specKey) { setViewmodel(t.equippedNade || t.cur, !!t.equippedNade); vm._specKey = wkey; }
+          const scopedT = t.scoped && WEAPONS[t.cur] && WEAPONS[t.cur].scope;
+          if (vm.current) vm.current.visible = !scopedT;     // un-hide (line above force-hid it); hide when they're scoped
+        }
       }
     }
   }

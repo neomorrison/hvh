@@ -39,8 +39,11 @@ export const INACC = {
   usp:    { stand: 6.4,  crouch: 5.18, run: 20.27,  fire: 13, max: 56,   recov: 0.44 },
   glock:  { stand: 7.6,  crouch: 6.2,  run: 17.6,   fire: 13, max: 56,   recov: 0.42 },
   ssg:    { stand: 3.23, crouch: 3.03, run: 155.43, fire: 0,  max: 10,   recov: 0.50, scopedStill: 0.35, unscoped: 48 },
-  scar:   { stand: 2.3,  crouch: 1.8,  run: 176.58, fire: 3,  max: 30,   recov: 0.45, scopedStill: 0.35, unscoped: 62 },
-  g3:     { stand: 2.3,  crouch: 1.8,  run: 176.58, fire: 3,  max: 30,   recov: 0.45, scopedStill: 0.35, unscoped: 62 },
+  // auto-snipers: pin-sharp FIRST scoped shot (scopedStill 0.35), but big per-shot bloom (fire) that
+  // recovers slower than the 0.25s fire interval (recov 0.55 half-life) — so spamming stacks toward the
+  // max cap and you must pause ~0.5-0.7s to reset. Matches CS2: accurate first shot, collapses if spammed.
+  scar:   { stand: 2.3,  crouch: 1.8,  run: 176.58, fire: 9,  max: 90,   recov: 0.55, scopedStill: 0.35, unscoped: 62 },
+  g3:     { stand: 2.3,  crouch: 1.8,  run: 176.58, fire: 8.5, max: 85,  recov: 0.55, scopedStill: 0.35, unscoped: 62 },   // G3SG1: fractionally smoother recoil than SCAR
 };
 export const INACC_K = 0.002;       // inaccuracy units -> cone half-angle radians (calibrated: USP stand ~0.013)
 export const AIRBORNE_INACC = 130;  // jumping/in-air penalty (units)
