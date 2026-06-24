@@ -148,7 +148,8 @@ function setupSky(b) {
   const horizon = 0x16273f;
   scene.background = new THREE.Color(horizon);
   scene.fog = new THREE.Fog(horizon, 2800, 12000);                  // distant buildings fade into night haze; dome stays visible
-  addMapObject(new THREE.HemisphereLight(0x8aa0c8, 0x1a1f2a, 0.42)); // soft sky fill on top of the core sun
+  addMapObject(new THREE.HemisphereLight(0x8aa0c8, 0x2a3140, 0.5));  // soft sky fill (brighter ground term so down-facing ceilings aren't black)
+  addMapObject(new THREE.AmbientLight(0x4a5468, 0.4));              // uniform fill — lifts interior ceilings the sun/point lights can't reach (and it's GPU-free vs more point lights)
 
   // night dome (inverted sphere) with procedural stars. Guarded so the headless THREE stub skips it.
   if (typeof THREE.ShaderMaterial === 'function' && typeof THREE.SphereGeometry === 'function' && typeof THREE.Mesh === 'function') {
