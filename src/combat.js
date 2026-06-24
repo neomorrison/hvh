@@ -304,10 +304,10 @@ export function aimbotFire(a) {
 }
 
 /* melee: slash (stab=false) / stab (stab=true), with backstab bonus */
-export function meleeAttack(a, stab) {
+export function meleeAttack(a, stab, auto) {
   if (a.fireCd > 0) return false;
-  const w = WEAPONS.knife; a.fireCd = stab ? w.stabCd : w.slashCd; a.lastShot = performance.now();
-  if (a.isHuman) sfxKnife(a, false);   // local swing only — bots stay silent unless they connect (no out-of-range swing loop)
+  const w = WEAPONS.knife;
+  // scan for a target in range/front/LOS BEFORE making any noise
   const fwd = new THREE.Vector3(-Math.sin(a.yaw), 0, -Math.cos(a.yaw));
   const me = eyePos(a); let best = null, bd = w.knifeRange;
   for (const t of agents) {
@@ -318,6 +318,11 @@ export function meleeAttack(a, stab) {
     if (!losClear(me, hitboxCenter(t, "chest"))) continue;
     if (d < bd) { bd = d; best = t; }
   }
+  // AUTO knife (cheat / bot out-of-ammo): only swing when something is actually in range — no
+  // cooldown burned and NO sound when whiffing empty air. This is what stops the stab-sound loop.
+  if (auto && !best) return false;
+  a.fireCd = stab ? w.stabCd : w.slashCd; a.lastShot = performance.now();
+  if (a.isHuman) sfxKnife(a, false);   // local swing (manual whiff still sounds; auto only reaches here with a target)
   if (!best) return false;
   const tf = new THREE.Vector3(-Math.sin(best.realYaw || best.yaw), 0, -Math.cos(best.realYaw || best.yaw));
   const toAtk = a.pos.clone().sub(best.pos).setY(0).normalize();
