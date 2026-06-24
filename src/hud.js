@@ -139,7 +139,7 @@ export function updateReloadRing() {
   } else ring.style.display = "none";
 }
 export function anyPanelOpen() {
-  return $("#buyPanel").classList.contains("show") || $("#cheatPanel").classList.contains("show") || $("#startPanel").classList.contains("show") || $("#editorPanel").classList.contains("show");
+  return $("#buyPanel").classList.contains("show") || $("#cheatPanel").classList.contains("show") || $("#startPanel").classList.contains("show");
 }
 export function updateBloomRing() {
   const human = refs.human; const ring = document.getElementById('bloomRing');

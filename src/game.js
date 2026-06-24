@@ -220,10 +220,11 @@ export function buyItem(it) {
     refreshBuyAfford(); updateAllHUD(); playBeep(700, 0.05);
     return;
   }
+  if (it.type === "nade" && human.nades[it.k] > 0) { showHint("Already have a " + NADES[it.k].name); return; }   // one of each grenade
   const cost = it.type === "armor" ? ARMOR[it.k].cost : NADES[it.k].cost;
   if (human.money < cost) { showHint("Not enough money"); return; }
   if (it.type === "armor") { human.armor = 100; if (it.k === "kevhelm") human.helmet = true; }
-  else { human.nades[it.k] = (human.nades[it.k] || 0) + 1; human.curNade = it.k; }
+  else { human.nades[it.k] = 1; human.curNade = it.k; }
   human.money -= cost; refreshBuyAfford(); updateAllHUD(); playBeep(700, 0.05);
 }
 export function openBuy() { if (!canBuyNow()) { showHint("Buy time is over"); return; } buildBuyMenu(); $("#buyPanel").classList.add("show"); document.exitPointerLock(); }
@@ -231,12 +232,22 @@ export function closeBuy() { $("#buyPanel").classList.remove("show"); if (GAME.p
 export function showBuyAuto() { showHint("BUY PHASE — press B to open buy menu"); }
 
 /* ============================== grenades ============================== */
+// distinct thrown model per grenade type
+export function nadeMesh(kind) {
+  const mat = c => new THREE.MeshStandardMaterial({ color: c, roughness: .7, metalness: .2 });
+  let g, m;
+  if (kind === "he") { g = new THREE.SphereGeometry(5, 10, 8); g.scale(1, 1.25, 1); m = mat(0x3f5a2f); }            // dark-green pineapple
+  else if (kind === "flash") { g = new THREE.CylinderGeometry(3.3, 3.3, 11, 10); m = mat(0xb7bcc2); }                // grey canister
+  else if (kind === "smoke") { g = new THREE.CylinderGeometry(3.8, 3.8, 10, 10); m = mat(0x5c6450); }                // olive canister
+  else { g = new THREE.CylinderGeometry(2.6, 3.6, 12, 10); m = mat(0x7a4a22); }                                       // molotov / incendiary bottle
+  return new THREE.Mesh(g, m);
+}
 export function throwNade(a, nadeKey) {
   if (!nadeKey || !(a.nades[nadeKey] > 0)) { if (a.isHuman) showHint("No grenade"); return false; }
   const kind = NADES[nadeKey].kind; a.nades[nadeKey]--;
   const o = eyePos(a); const dir = new THREE.Vector3(0, 0, -1).applyEuler(new THREE.Euler(a.pitch, a.yaw, 0, 'YXZ'));
   const vel = dir.multiplyScalar(900).add(new THREE.Vector3(0, 260, 0));
-  const m = new THREE.Mesh(new THREE.SphereGeometry(5, 8, 8), new THREE.MeshStandardMaterial({ color: kind === "he" ? 0x3a5a2a : kind === "flash" ? 0xcccccc : kind === "smoke" ? 0x556 : 0x884422 }));
+  const m = nadeMesh(kind);
   m.position.copy(o); scene.add(m);
   nadeProjectiles.push({ m, pos: o.clone(), vel, kind, owner: a, t: 0 });
   sfxNade('throw', a.pos);

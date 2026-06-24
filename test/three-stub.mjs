@@ -88,7 +88,7 @@ export class BufferGeometry extends Geo {}
 export class Mesh extends Object3D { constructor(geometry, material) { super(); this.geometry = geometry || new Geo(); this.material = material || new Mat(); this.isMesh = true; } }
 export class Line extends Object3D { constructor(geometry, material) { super(); this.geometry = geometry || new Geo(); this.material = material || new Mat(); } }
 
-class Light extends Object3D { constructor() { super(); this.shadow = { mapSize: { set() {} }, camera: {} }; } }
+class Light extends Object3D { constructor(color, intensity) { super(); this.color = new Color(color); this.intensity = intensity ?? 1; this.shadow = { mapSize: { set() {} }, camera: {} }; } }
 export class HemisphereLight extends Light {}
 export class DirectionalLight extends Light {}
 export class PointLight extends Light {}
