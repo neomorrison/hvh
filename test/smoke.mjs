@@ -7,8 +7,10 @@ function makeEl() {
     style: {}, dataset: {}, value: '', checked: false,
     classList: { _s: new Set(), add(c) { this._s.add(c); }, remove(c) { this._s.delete(c); }, toggle(c, f) { if (f === undefined) f = !this._s.has(c); f ? this._s.add(c) : this._s.delete(c); return f; }, contains(c) { return this._s.has(c); } },
     width: 1280, height: 720, _children: [],
-    appendChild(c) { this._children.push(c); return c; }, prepend(c) { this._children.unshift(c); return c; },
-    remove() {}, removeChild() {}, insertBefore(c) { this._children.push(c); return c; },
+    appendChild(c) { if (c) c._parent = this; this._children.push(c); return c; }, prepend(c) { if (c) c._parent = this; this._children.unshift(c); return c; },
+    remove() { const p = this._parent; if (p) { const i = p._children.indexOf(this); if (i >= 0) p._children.splice(i, 1); } },   // real removal so trim loops (kill feed/hit log) terminate
+    removeChild(c) { const i = this._children.indexOf(c); if (i >= 0) this._children.splice(i, 1); return c; },
+    insertBefore(c) { if (c) c._parent = this; this._children.push(c); return c; },
     addEventListener() {}, removeEventListener() {}, requestPointerLock() {},
     querySelector() { return makeEl(); }, querySelectorAll() { return []; },
     getContext() { return makeCtx(); }, getBoundingClientRect() { return { left: 0, top: 0, width: 1280, height: 720 }; },

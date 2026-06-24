@@ -61,15 +61,19 @@ export function moveAgent(a, dirXZ, dt, combat) {
     // imported mesh map: slide along real walls (above the step zone so stairs stay walkable),
     // follow the real (multi-level) floor
     const feetY = a.pos.y, crouch = a.crouch;
+    // CS2 crouch-jump: crouching in the air tucks the legs up, so the body clears (and can mount) a
+    // ledge higher than a standing jump. Model it by raising the collision feet while crouched+airborne.
+    const tuck = (crouch && !wasOnGround) ? 18 : 0;
+    const slideFeet = feetY + tuck;
     // substep the horizontal move so a fast frame (jump/peek) can't tunnel a thin wall
     const mvx = a.pos.x - prevX, mvz = a.pos.z - prevZ;
     const sub = Math.max(1, Math.ceil(Math.hypot(mvx, mvz) / (PLAYER_RADIUS * 0.75)));
     let cx = prevX, cz = prevZ;
     for (let i = 1; i <= sub; i++) {
-      const [sx, sz] = meshBackend.slideXZ(cx, cz, prevX + mvx * i / sub, prevZ + mvz * i / sub, feetY, PLAYER_RADIUS, crouch);
+      const [sx, sz] = meshBackend.slideXZ(cx, cz, prevX + mvx * i / sub, prevZ + mvz * i / sub, slideFeet, PLAYER_RADIUS, crouch);
       cx = sx; cz = sz;
     }
-    [cx, cz] = meshBackend.pushOut(cx, cz, feetY, PLAYER_RADIUS, crouch);    // depenetrate from walls
+    [cx, cz] = meshBackend.pushOut(cx, cz, slideFeet, PLAYER_RADIUS, crouch);    // depenetrate from walls
     // hard playable-bounds clamp — last-resort guard against any residual leak out of the map
     cx = Math.min(Math.max(cx, MAP_BOUNDS.minX + PLAYER_RADIUS), MAP_BOUNDS.maxX - PLAYER_RADIUS);
     cz = Math.min(Math.max(cz, MAP_BOUNDS.minZ + PLAYER_RADIUS), MAP_BOUNDS.maxZ - PLAYER_RADIUS);
@@ -83,8 +87,8 @@ export function moveAgent(a, dirXZ, dt, combat) {
       if (meshBackend.windowBvh) { const w = meshBackend.windowBvh.raycast(a.pos.x, prevY + ho, a.pos.z, 0, 1, 0, rise + 2); if (w && (!ch || w.t < ch.t)) ch = w; }   // unbroken glass overhead (consistent with slideXZ/pushOut)
       if (ch) { a.pos.y = prevY + Math.max(0, ch.t - 0.5); a.vel.y = 0; }
     }
-    let g = meshBackend.groundHeight(a.pos.x, a.pos.z, a.pos.y);
-    let snap = g > -1e8 && a.pos.y <= g + 0.5;                  // landing / step-up onto a ≤18u ledge
+    let g = meshBackend.groundHeight(a.pos.x, a.pos.z, a.pos.y, 18 + tuck);   // crouch-jump mounts a taller ledge
+    let snap = g > -1e8 && a.pos.y <= g + 0.5;                  // landing / step-up onto a ledge
     if (!snap && wasOnGround && a.vel.y <= 0) {                 // grounded last frame, not jumping → stick to a nearby
       const gd = meshBackend.groundHeight(a.pos.x, a.pos.z, a.pos.y, 4);   // lower step so walking down stairs/edges doesn't free-fall
       if (gd > -1e8 && a.pos.y - gd <= 24) { g = gd; snap = true; }

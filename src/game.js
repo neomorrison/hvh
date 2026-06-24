@@ -8,7 +8,7 @@ import { CT_SPAWNS, T_SPAWNS, HOSTAGE_SPAWNS, RESCUE_ZONES, losClear } from './w
 import { spawnAgent, applyPersona, BOT_PERSONAS, recolorAgent, eyePos, hitboxCenter, setViewmodel } from './agents.js';
 import { giveWeapon, selectBest, switchTo, killAgent } from './combat.js';
 import { botBuy } from './ai.js';
-import { agents, refs, GAME, FREEZE_TIME, ROUND_TIME, END_TIME } from './state.js';
+import { agents, refs, GAME, FREEZE_TIME, ROUND_TIME, END_TIME, BUY_TIME } from './state.js';
 import { meshBackend } from './sourcemap.js';
 import { clearEffects, addExplosion, smokes, fires, nadeProjectiles } from './effects.js';
 import { centerMessage, showHint, updateAllHUD, updateHUDWeapons, addKillFeedText, damageFlash, doFlash, playBeep } from './hud.js';
@@ -29,7 +29,7 @@ export function buildTeams() {
 export function liveHostages() { return GAME.hostages.filter(h => !h.rescued && !h.dead); }
 
 export function startRound() {
-  GAME.phase = "buy"; GAME.freeze = FREEZE_TIME; GAME.timer = ROUND_TIME; GAME.winner = null; GAME.rescued = 0;
+  GAME.phase = "buy"; GAME.freeze = FREEZE_TIME; GAME.buyTimer = BUY_TIME; GAME.timer = ROUND_TIME; GAME.winner = null; GAME.rescued = 0;
   clearEffects();
   const ctList = agents.filter(a => a.team === TEAM.CT), tList = agents.filter(a => a.team === TEAM.T);
   ctList.forEach((a, i) => resetAgentForRound(a, CT_SPAWNS[i % CT_SPAWNS.length]));
@@ -167,6 +167,7 @@ export function buildBuyMenu() {
     else { const n = NADES[it.k]; nm = n.name; cost = n.cost; desc = n.kind; }
     el.innerHTML = `<div class="bn"><span><span class="key">${keymap[i] || ""}</span>${nm}</span><span class="bp">$${cost}</span></div><div class="bd">${desc}</div>`;
     el.onclick = () => buyItem(it);
+    el.oncontextmenu = e => { e.preventDefault(); sellItem(it); };   // right-click sells a gun bought this round
     el.dataset.idx = i; el._it = it; grid.appendChild(el);
   });
   buildBuyMenu._items = items; buildBuyMenu._keymap = keymap;
@@ -180,14 +181,27 @@ export function refreshBuyAfford() {
     const it = el._it; if (!it) return;
     const cost = it.type === "w" ? WEAPONS[it.k].cost : it.type === "armor" ? ARMOR[it.k].cost : NADES[it.k].cost;
     let afford;
-    if (it.type === "w") { const slotName = WEAPONS[it.k].slot === 2 ? 'primary' : 'secondary'; const prev = human.boughtThisBuy[slotName]; afford = human.money + (prev ? prev.cost : 0) >= cost; }
+    if (it.type === "w") { const slotName = WEAPONS[it.k].slot === 2 ? 'primary' : 'secondary'; const prev = human.boughtThisBuy[slotName]; afford = human.money + (prev ? prev.cost : 0) >= cost; el.classList.toggle("owned", !!(prev && prev.key === it.k)); }
     else afford = human.money >= cost;
     el.classList.toggle("cant", !afford);
   });
 }
+export function canBuyNow() { return GAME.buyTimer > 0 && (GAME.phase === "buy" || GAME.phase === "live"); }
+export function sellItem(it) {                              // right-click a weapon bought this buy to sell it back
+  const human = refs.human;
+  if (!canBuyNow() || !it || it.type !== "w") return;
+  const w = WEAPONS[it.k], slotName = w.slot === 2 ? 'primary' : 'secondary';
+  const bought = human.boughtThisBuy[slotName];
+  if (!bought || bought.key !== it.k) { showHint("Can only sell what you bought this round"); return; }
+  human.money = Math.min(ECON.max, human.money + bought.cost);
+  delete human.weapons[it.k];
+  if (slotName === 'primary') human.slotPrimary = null; else { human.slotSecondary = null; giveWeapon(human, human.team === TEAM.CT ? "usp" : "glock"); }   // keep a sidearm
+  delete human.boughtThisBuy[slotName];
+  selectBest(human); refreshBuyAfford(); updateAllHUD(); playBeep(360, 0.06);
+}
 export function buyItem(it) {
   const human = refs.human;
-  if (GAME.phase !== "buy") { showHint("Can only buy during buy phase"); return; }
+  if (!canBuyNow()) { showHint("Buy time is over"); return; }
   if (it.type === "w") {
     const w = WEAPONS[it.k];
     const slotName = w.slot === 2 ? 'primary' : 'secondary';
@@ -211,7 +225,7 @@ export function buyItem(it) {
   else { human.nades[it.k] = (human.nades[it.k] || 0) + 1; human.curNade = it.k; }
   human.money -= cost; refreshBuyAfford(); updateAllHUD(); playBeep(700, 0.05);
 }
-export function openBuy() { if (GAME.phase !== "buy") { showHint("Buy phase is over"); return; } buildBuyMenu(); $("#buyPanel").classList.add("show"); document.exitPointerLock(); }
+export function openBuy() { if (!canBuyNow()) { showHint("Buy time is over"); return; } buildBuyMenu(); $("#buyPanel").classList.add("show"); document.exitPointerLock(); }
 export function closeBuy() { $("#buyPanel").classList.remove("show"); if (GAME.phase !== "warmup" && !$("#cheatPanel").classList.contains("show")) renderer.domElement.requestPointerLock(); }
 export function showBuyAuto() { showHint("BUY PHASE — press B to open buy menu"); }
 
