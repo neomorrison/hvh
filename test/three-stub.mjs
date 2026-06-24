@@ -92,6 +92,7 @@ class Light extends Object3D { constructor() { super(); this.shadow = { mapSize:
 export class HemisphereLight extends Light {}
 export class DirectionalLight extends Light {}
 export class PointLight extends Light {}
+export class AmbientLight extends Light {}
 
 export class PerspectiveCamera extends Object3D {
   constructor(fov = 60, aspect = 1, near = 1, far = 1000) { super(); this.fov = fov; this.aspect = aspect; this.near = near; this.far = far; }
