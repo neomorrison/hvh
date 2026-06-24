@@ -24,7 +24,7 @@ import { buildDefaultMap } from './map.js';
 import { loadSourceMap } from './sourcemap_load.js';
 import { meshBackend } from './sourcemap.js';
 import { setListener, sfxScope, unlockAudio, sfxRevolverCock } from './sfx.js';
-import { toggleEditor, isEditorOpen, editorUpdate, editorMouse, editorClick, editorWheel, editorKey, loadPatches } from './editor.js';
+import { toggleEditor, isEditorOpen, editorUpdate, editorRender, editorKey, loadPatches } from './editor.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
 const $ = s => document.querySelector(s);
@@ -96,18 +96,15 @@ addEventListener('keydown', e => {
 });
 addEventListener('keyup', e => { keys[e.code] = false; if (e.code === "Tab") $("#sbPanel").classList.remove("show"); });
 
-renderer.domElement.addEventListener('mousedown', e => { if (e.button === 0) { input.mouseDown = true; if (refs.human && refs.human.cur === "r8") refs.human.fireMode = "primary"; } if (e.button === 2) { input.rmbDown = true; onRMB(); } });
-addEventListener('mouseup', e => { if (e.button === 0) input.mouseDown = false; if (e.button === 2) input.rmbDown = false; });
+renderer.domElement.addEventListener('mousedown', e => { if (isEditorOpen()) return; if (e.button === 0) { input.mouseDown = true; if (refs.human && refs.human.cur === "r8") refs.human.fireMode = "primary"; } if (e.button === 2) { input.rmbDown = true; onRMB(); } });
+addEventListener('mouseup', e => { if (isEditorOpen()) return; if (e.button === 0) input.mouseDown = false; if (e.button === 2) input.rmbDown = false; });
 addEventListener('contextmenu', e => e.preventDefault());
 addEventListener('mousemove', e => {
-  if (document.pointerLockElement !== renderer.domElement) return;
-  if (isEditorOpen()) { editorMouse(e.movementX, e.movementY); return; }
-  if (!refs.human) return;
+  if (isEditorOpen() || document.pointerLockElement !== renderer.domElement || !refs.human) return;   // the editor manages its own pointer
   const sens = 0.0022;
   if (refs.human.alive) { refs.human.yaw -= e.movementX * sens; refs.human.pitch = THREE.MathUtils.clamp(refs.human.pitch - e.movementY * sens, -1.5, 1.5); }
   else if (spec.free) { spec.yaw -= e.movementX * sens; spec.pitch = THREE.MathUtils.clamp(spec.pitch - e.movementY * sens, -1.5, 1.5); }   // spectator free-cam look
 });
-renderer.domElement.addEventListener('wheel', e => { if (isEditorOpen()) { editorWheel(e.deltaY); e.preventDefault(); } }, { passive: false });
 function onRMB() {
   const human = refs.human; if (!human.alive) return;
   const w = WEAPONS[human.cur];
@@ -117,7 +114,7 @@ function onRMB() {
 }
 renderer.domElement.addEventListener('click', () => {
   unlockAudio();   // a user gesture lets the WebAudio context start
-  if (isEditorOpen()) { editorClick(); renderer.domElement.requestPointerLock(); return; }
+  if (isEditorOpen()) return;   // editor uses a visible cursor (no pointer lock) and its own handlers
   if (GAME.phase === "warmup" || GAME.phase === "editor" || anyPanelOpen()) return;
   if (refs.human && !refs.human.alive && !spec.free) cycleSpec(1);   // spectating locked: click switches player
   renderer.domElement.requestPointerLock();
@@ -334,7 +331,7 @@ function updateCamera() {
     }
   }
 }
-function render() { renderer.render(scene, camera); }
+function render() { if (isEditorOpen()) { editorRender(); return; } renderer.render(scene, camera); }
 
 /* ============================== boot / deploy ============================== */
 // the human spawns on a RANDOM team each match; buildTeams keeps both sides 12-strong regardless
