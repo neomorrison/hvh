@@ -184,11 +184,20 @@ function humanShoot(dt) {
       return;
     }
     if (c8.aimbot.on && c8.aimbot.autoRevolver) {
-      // pre-cock the hammer almost fully (up to 0.99) and HOLD, so when a shot qualifies it fires
-      // near-instantly; play the cock sound once each time the hammer reaches back.
-      human.r8Charge = Math.min(0.99, (human.r8Charge || 0) + dt / COCK);
-      if (human.r8Charge >= 0.95 && !human.r8Cocked) { human.r8Cocked = true; sfxRevolverCock(); }
-      if (human.fireCd <= 0 && human.r8Charge >= 0.95) { if (wp8.ammo <= 0) { startReload(human); return; } human.fireMode = "primary"; if (aimbotFire(human)) { human.r8Charge = 0; human.r8Cocked = false; } updateHUDWeapons(); }
+      // CONSTANT auto-cock: the hammer cycles every ~0.2s and never holds — the cock sound plays
+      // EVERY cycle. On each completed cock it fires ONLY if the target is firable right then
+      // (aimbotFire re-checks canShoot), and the 0.2s cock cadence — not the R8's normal cooldown —
+      // is the fire-rate limit, so it shoots faster than a manual cock.
+      const AUTO_COCK = 0.2;
+      human.r8Charge = (human.r8Charge || 0) + dt / AUTO_COCK;
+      if (human.r8Charge >= 1) {
+        human.r8Charge -= 1;                                   // immediately re-cock for the next cycle
+        sfxRevolverCock();                                     // cock sound every cycle
+        if (wp8.ammo <= 0) { startReload(human); return; }
+        human.fireMode = "primary";
+        if (aimbotFire(human)) human.fireCd = 0;               // fired (target was firable) → cock cadence paces it
+        updateHUDWeapons();
+      }
       return;
     }
     if (c8.aimbot.on) {
