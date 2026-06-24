@@ -5,7 +5,7 @@
 import * as THREE from 'three';
 import {
   WEAPONS, INACC, INACC_K, AIRBORNE_INACC, LAND_INACC, GRAVITY, JUMP_VEL,
-  EYE_STAND, EYE_CROUCH, PLAYER_RADIUS, ECON, computeDamage, TEAM,
+  EYE_STAND, EYE_CROUCH, PLAYER_RADIUS, ECON, computeDamage, TEAM, BHOP_MAX,
 } from './data.js';
 import { WALLS, segAABB, rayAABB, penetrate, losClear, collideMove, MAP_BOUNDS, CT_SPAWNS, T_SPAWNS } from './world.js';
 import { meshBackend } from './sourcemap.js';
@@ -27,8 +27,11 @@ export function computeBloom(a) {
     if (a.scoped) base = I.scopedStill != null ? I.scopedStill : 0.3;
     else { base = I.unscoped != null ? I.unscoped : 50; runTarget = Math.max(I.run, base * 1.4); }
   } else base = a.crouch ? I.crouch : I.stand;
-  const thr = 0.34 * maxSp;
-  if (sp > thr) { const t = Math.min(1, (sp - thr) / (maxSp - thr)); base = base + (runTarget - base) * t * t; }
+  // scoped auto-snipers are the MOST movement-punished (CS2): accuracy collapses almost the instant you
+  // move, on a harsh linear ramp — so you must be standing still to land a scoped shot.
+  const scopedSniper = w.scope && a.scoped;
+  const thr = (scopedSniper ? 0.08 : 0.34) * maxSp;
+  if (sp > thr) { const t = Math.min(1, (sp - thr) / (maxSp - thr)); base = base + (runTarget - base) * (scopedSniper ? t : t * t); }
   if (!a.onGround) base += AIRBORNE_INACC;
   // firing buildup + getting-shot flinch + post-landing penalty (can't snap-accurate on landing)
   const total = base + (a.firePenalty || 0) + (a.hurtBloom || 0) + (a.landBloom || 0);
@@ -60,6 +63,7 @@ export function moveAgent(a, dirXZ, dt, combat) {
   if (a.walk) speed *= 0.52;
   if (combat) speed *= 0.9;
   if (a.speedScale != null) speed *= a.speedScale;          // auto-stop
+  if (a.bhopBoost) speed *= Math.min(BHOP_MAX, a.bhopBoost);   // bunny-hop chain speed boost (human only sets it)
   const v = dirXZ.clone().setY(0); if (v.lengthSq() > 0) v.normalize().multiplyScalar(speed);
   a.vel.x = v.x; a.vel.z = v.z;
   a.vel.y -= GRAVITY * dt;
@@ -112,10 +116,10 @@ export function moveAgent(a, dirXZ, dt, combat) {
       if (gd > -1e8 && a.pos.y - gd <= 24) { g = gd; snap = true; }
     }
     if (snap) {
-      a.pos.y = g;
+      a.pos.y = g; a._landedThisFrame = !wasOnGround;   // touched ground THIS frame → a same-frame jump bhops
       if (!wasOnGround) { const impact = Math.min(1, Math.abs(descend) / JUMP_VEL); a.landBloom = Math.max(a.landBloom || 0, LAND_INACC * (0.45 + impact * 0.9)); }
       a.vel.y = 0; a.onGround = true;
-    } else a.onGround = false;
+    } else { a.onGround = false; a._landedThisFrame = false; }
     if (depenetrateAgents(a)) {   // body-vs-body push, then keep it out of walls
       [a.pos.x, a.pos.z] = meshBackend.pushOut(a.pos.x, a.pos.z, slideFeet, PLAYER_RADIUS, crouch);
       a.pos.x = Math.min(Math.max(a.pos.x, MAP_BOUNDS.minX + PLAYER_RADIUS), MAP_BOUNDS.maxX - PLAYER_RADIUS);
@@ -125,13 +129,13 @@ export function moveAgent(a, dirXZ, dt, combat) {
     return;
   }
   if (a.pos.y < 0) {
-    a.pos.y = 0;
+    a.pos.y = 0; a._landedThisFrame = !wasOnGround;
     if (!wasOnGround) {                                      // just landed → landing inaccuracy
       const impact = Math.min(1, Math.abs(descend) / JUMP_VEL);
       a.landBloom = Math.max(a.landBloom || 0, LAND_INACC * (0.45 + impact * 0.9));
     }
     a.vel.y = 0; a.onGround = true;
-  } else a.onGround = false;
+  } else { a.onGround = false; a._landedThisFrame = false; }
   a.eye = (a.crouch ? EYE_CROUCH : EYE_STAND) + a.pos.y;
   depenetrateAgents(a);                                       // body-vs-body push
   collideMove(a.pos, PLAYER_RADIUS, a.pos.y, a.crouch ? 46 : 72);   // then re-resolve walls
@@ -227,7 +231,10 @@ export function killAgent(shooter, target, group, wkey) {
   addKillFeed(shooter, target, wkey, group === "head");
   playBeep(140, 0.12);
   checkRoundEnd();
-  if (target.isHuman) onHumanDeath();
+  if (target.isHuman) {
+    if (shooter && shooter !== target) addTracer(eyePos(shooter), hitboxCenter(target, "chest"), 0xff3030, 3);   // killing-shot tracer, lingers 3s on the death-cam
+    onHumanDeath();
+  }
 }
 
 export function visibleTo(a, t) {
@@ -312,6 +319,18 @@ export function aimbotFire(a) {
   if ((a.weapons[a.cur].ammo || 0) <= 0) { startReload(a); return false; }
   const dist = me.distanceTo(cs.aimPoint);
   fireWeaponCommon(a);
+  // RESOLVER vs a desyncing enemy: an un-resolved shot whiffs to the FAKE (rendered) side. Resolver OFF →
+  // the desync always beats you; resolver ON resolves with probability cb.resolver.accuracy (so it can
+  // still be baited). Non-desyncing targets are unaffected (cs.tgt._desyncOff is null).
+  if (cs.tgt._desyncOff) {
+    const rp = cb.resolver.on ? (cb.resolver.accuracy != null ? cb.resolver.accuracy : 0.7) : 0;
+    if (Math.random() >= rp) {
+      const fake = cs.aimPoint.clone().add(cs.tgt._desyncOff);
+      addTracer(me.clone().add(fake.clone().sub(me).normalize().multiplyScalar(40)), fake); addImpact(fake);
+      if (a.isHuman) addHitLog("desync beat the resolver", "inacc");
+      return true;
+    }
+  }
   addTracer(me.clone().add(dirTo.clone().multiplyScalar(40)), cs.aimPoint);
   if (meshBackend.active) { const brk = meshBackend.breakWindowsAlong(me.x, me.y, me.z, dirTo.x, dirTo.y, dirTo.z, dist + 60); if (brk && brk.center) sfxImpact(brk.center, true); }   // shatter glass in the line of fire
   // human lands at pure bloom accuracy (already past the min-hit-chance gate); a bot lands at

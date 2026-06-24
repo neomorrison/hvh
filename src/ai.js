@@ -5,7 +5,7 @@ import * as THREE from 'three';
 import { WEAPONS, TEAM, JUMP_VEL } from './data.js';
 import { NODES, EDGES, RESCUE_ZONES, MAP_BOUNDS, astar, nearestNode, losClear } from './world.js';
 import { hitboxCenter, eyePos } from './agents.js';
-import { agents, GAME } from './state.js';
+import { agents, GAME, clock } from './state.js';
 import { aimbotFire, moveAgent, meleeAttack, visibleTo, startReload, giveWeapon, hasAnyAmmo } from './combat.js';
 import { liveHostages } from './game.js';
 
@@ -83,12 +83,14 @@ function botMove(a, dir, dt, combat) {
   if (dir.lengthSq() > 1e-4 && progress < dt * 18) {
     a.aiStuck = (a.aiStuck || 0) + dt;
     if (a.aiStuck > 0.3 && a.onGround && a.aiState !== "fight") a.vel.y = JUMP_VEL;   // hop a ledge while roaming (not mid-fight — jumping ruins aim)
-    if (a.aiStuck > 0.7 && a.aiState !== "fight") {
+    if (a.aiStuck > 0.7) {                                                            // genuinely wedged → unstick, even mid-fight
       // can't traverse this edge — TEMPORARILY cut it so A* routes around (e.g. the real doorway).
       // Skip the cut when a teammate is shoving us (separation false-positive); pruneEdge auto-heals
       // it and refuses to sever chain edges, so the graph can never fragment into a stalemate.
       if (a.aiPath && a.aiPath.length && !sep) pruneEdge(nearestNode(a.pos), a.aiPath[0]);
-      a.aiPath = []; a.aiTimer = 0; a.yaw += (Math.random() - 0.5) * 1.5; a.aiStuck = 0;
+      a.aiPath = []; a.aiTimer = 0; a.aiStuck = 0;
+      if (a.aiState !== "fight") a.yaw += (Math.random() - 0.5) * 1.5;                // roaming: spin to a new heading
+      else { const pl = Math.hypot(dir.z, dir.x) || 1, s = (Math.random() < 0.5 ? 1 : -1) * 2; a.pos.x += -dir.z / pl * s; a.pos.z += dir.x / pl * s; }   // mid-fight: tiny perpendicular sidestep off the corner (don't spin aim)
     }
   } else a.aiStuck = 0;
 }
@@ -158,7 +160,7 @@ export function botThink(a, dt) {
       // real angle instead of freezing against the wall shooting it. Roam state keeps stuck-detection and
       // repathing active so a bot wedged on cover routes around it. THIS is what breaks the camp standoff.
       a.aiState = "roam";
-      if (needRepath(a)) { navTo(a, nearestNode(target.pos)); a.aiTimer = 0.7 + Math.random() * 0.5; }
+      if (needRepath(a)) { navTo(a, nearestNode(target.pos)); if (a.aiPathFail) navTo(a, roamNode(a)); a.aiTimer = 0.7 + Math.random() * 0.5; }   // target unreachable → relocate to a fresh angle, not the wall
       followPath(a, dt, true);
       aimbotFire(a);                                  // still try — autowall punches thin walls; thick ones just won't fire
     } else {
@@ -181,7 +183,7 @@ export function botThink(a, dt) {
     if (a.aiLastSeenT > 0) a.aiLastSeenT -= dt;
     if (a.aiLastSeenT > 0 && a.aiLastSeen && a.pos.distanceTo(a.aiLastSeen) > 80) {
       // an enemy just broke line of sight — chase to where we last saw them instead of forgetting them
-      if (needRepath(a)) { navTo(a, nearestNode(a.aiLastSeen)); a.aiTimer = 1 + Math.random(); }
+      if (needRepath(a)) { navTo(a, nearestNode(a.aiLastSeen)); if (a.aiPathFail) navTo(a, roamNode(a)); a.aiTimer = 1 + Math.random(); }
     } else {
       a.aiLastSeen = null;
       if (needRepath(a)) { pickGoal(a); a.aiTimer = 2 + Math.random() * 2; }
@@ -191,25 +193,49 @@ export function botThink(a, dt) {
   }
 }
 
-function centerNode() { const cx = (MAP_BOUNDS.minX + MAP_BOUNDS.maxX) / 2, cz = (MAP_BOUNDS.minZ + MAP_BOUNDS.maxZ) / 2; return nearestNode(new THREE.Vector3(cx, 0, cz)); }
+let _roamOrder = null, _roamLen = -1;
+function roamOrder() {   // node ids sorted along the map's long axis (memoized per map load)
+  if (_roamOrder && _roamLen === NODES.length) return _roamOrder;
+  const lx = (MAP_BOUNDS.maxX - MAP_BOUNDS.minX) >= (MAP_BOUNDS.maxZ - MAP_BOUNDS.minZ);
+  _roamOrder = NODES.map(n => n.id).sort((u, v) => lx ? NODES[u].p.x - NODES[v].p.x : NODES[u].p.z - NODES[v].p.z);
+  _roamLen = NODES.length; return _roamOrder;
+}
+function botIndex(a) { if (a._botIdx == null) a._botIdx = agents.indexOf(a); return a._botIdx; }
+// a patrol node for THIS bot: own a slowly-drifting BAND of the map (by stable index) and, within it,
+// pick the node FARTHEST from living teammates — so idle bots fan across the whole map and explore
+// instead of all funnelling to the centre and clumping.
+function roamNode(a) {
+  const order = roamOrder(); if (!order.length) return 0;
+  const team = agents.filter(t => t.team === a.team && !t.isHuman).length || 1;
+  const phase = (clock.t / 11 + botIndex(a) * 0.37) % 1;
+  const base = (((botIndex(a) % team) / team) + phase) % 1;
+  const bi = Math.min(order.length - 1, Math.max(0, Math.floor(base * order.length)));
+  let best = order[bi], bestScore = -1e9;
+  for (let k = -2; k <= 2; k++) {
+    const id = order[((bi + k) % order.length + order.length) % order.length];
+    let mind = 1e9; for (const m of agents) { if (m === a || !m.alive || m.team !== a.team) continue; const d = NODES[id].p.distanceToSquared(m.pos); if (d < mind) mind = d; }
+    if (mind > bestScore) { bestScore = mind; best = id; }
+  }
+  return best;
+}
 export function pickGoal(a) {
   let goalNode;
   const enemies = agents.filter(t => t.alive && t.team !== a.team);
   let near = null, nd = 1e9; for (const e of enemies) { const d = a.pos.distanceToSquared(e.pos); if (d < nd) { nd = d; near = e; } }
-  // hvh deathmatch: hunt the nearest enemy so the teams actually meet and trade. Repathing toward the
-  // enemy each cycle is self-reinforcing. The hunt chance RISES the longer a bot goes without contact
-  // (anti-camp), and CT — which loses on the clock — is forced to push as the round timer runs down,
-  // so rounds resolve instead of stalemating. The remainder drift to the contested CENTER, not spawn.
-  const huntP = Math.min(0.95, 0.62 + (a.aiNoContact || 0) * 0.06);
+  // hvh deathmatch: hunt the nearest enemy so teams meet and trade, but only ~2 bots may converge on the
+  // SAME enemy (the rest spread); aiNoContact still escalates the hunt (anti-camp) and lateCT must push the
+  // clock down (anti-stalemate). Otherwise FAN OUT to a distinct patrol region (roamNode) so bots explore.
+  const huntP = Math.min(0.92, 0.5 + (a.aiNoContact || 0) * 0.06);
   const lateCT = a.team === TEAM.CT && GAME.phase === "live" && GAME.timer < 35;
-  if (near && (lateCT || (a.aiNoContact || 0) > 6 || Math.random() < huntP)) {
+  let hunters = 0; if (near) for (const m of agents) { if (m !== a && m.team === a.team && m.alive && m.aiTarget === near) hunters++; }
+  if (near && hunters < 2 && (lateCT || (a.aiNoContact || 0) > 6 || Math.random() < huntP)) {
     goalNode = nearestNode(near.pos);
-  } else if (a.team === TEAM.CT) {
-    if (a.carrying && RESCUE_ZONES.length) goalNode = nearestNode(new THREE.Vector3(RESCUE_ZONES[0].x, 0, RESCUE_ZONES[0].z));
-    else { const hs = liveHostages(); goalNode = hs.length ? nearestNode(hs[(Math.random() * hs.length) | 0].pos) : centerNode(); }
+  } else if (a.team === TEAM.CT && a.carrying && RESCUE_ZONES.length) {
+    goalNode = nearestNode(new THREE.Vector3(RESCUE_ZONES[0].x, 0, RESCUE_ZONES[0].z));
+  } else if (Math.random() < 0.3 && liveHostages().length) {
+    const hs = liveHostages(); goalNode = nearestNode(hs[(Math.random() * hs.length) | 0].pos);   // sometimes patrol an objective
   } else {
-    const h = liveHostages()[0];
-    goalNode = (h && Math.random() < 0.5) ? nearestNode(h.pos) : centerNode();
+    goalNode = roamNode(a);                                                                       // fan out to explore
   }
   navTo(a, goalNode);
 }

@@ -128,7 +128,7 @@ export function updateESP() {
   if (!v || !v.esp || !human || !human.alive || GAME.phase === "warmup") return;
   for (const e of agents) {
     if (!e.alive || e.isHuman || e.team === human.team) continue;
-    const head = hitboxCenter(e, "head"); head.y += 10; const feet = new THREE.Vector3(e.pos.x, 0, e.pos.z);
+    const head = hitboxCenter(e, "head"); head.y += 6; const feet = new THREE.Vector3(e.pos.x, e.pos.y, e.pos.z);   // feet at the ACTUAL floor (e.pos.y), not world-0 — else text floats above the head on lower floors
     const ph = worldToScreen(head, W, H), pf = worldToScreen(feet, W, H);
     if (!ph || !pf || ph.behind || pf.behind) continue;
     const h = Math.max(8, pf.y - ph.y), w = h * 0.42, x = ph.x - w / 2, y = ph.y;
@@ -139,6 +139,17 @@ export function updateESP() {
     if (v.health) { const hp = Math.max(0, Math.min(1, e.hp / 100)); espCtx.fillStyle = "#000"; espCtx.fillRect(x - 6, y, 3, h); espCtx.fillStyle = `hsl(${hp * 120},85%,50%)`; espCtx.fillRect(x - 6, y + h * (1 - hp), 3, h * hp); }
     if (v.name) { espCtx.fillStyle = vis ? "#d6f5d6" : "#f2c4c4"; espCtx.font = "11px 'Trebuchet MS',sans-serif"; espCtx.textAlign = "center"; espCtx.fillText(e.name + (e.cur ? " · " + (WEAPONS[e.cur] ? WEAPONS[e.cur].name : "") : ""), ph.x, y - 5); }
     if (v.distance) { espCtx.fillStyle = "#cdd6e4"; espCtx.font = "9px sans-serif"; espCtx.textAlign = "center"; espCtx.fillText(Math.round(human.pos.distanceTo(e.pos) / 40) + "m", ph.x, pf.y + 11); }
+  }
+  // LOCAL desync hitbox: REAL (green) vs DESYNCED/fake (red) — shows where an un-resolved enemy aims
+  if (v && v.desyncBox && human.alive) {
+    const box = (cx, cz, col) => {
+      const hd = hitboxCenter(human, "head"); hd.x = cx; hd.z = cz; hd.y += 6;
+      const ph = worldToScreen(hd, W, H), pf = worldToScreen(new THREE.Vector3(cx, human.pos.y, cz), W, H);
+      if (!ph || !pf || ph.behind || pf.behind) return;
+      const h = Math.max(8, pf.y - ph.y), w = h * 0.42; espCtx.lineWidth = 2; espCtx.strokeStyle = col; espCtx.strokeRect(ph.x - w / 2, ph.y, w, h);
+    };
+    box(human.pos.x, human.pos.z, "#39ff5a");                                                    // real hitbox
+    const off = human._desyncOff; if (off) box(human.pos.x + off.x, human.pos.z + off.z, "#ff4444");   // fake/desynced
   }
 }
 const RELOAD_C = 2 * Math.PI * 20;
