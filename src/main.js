@@ -24,6 +24,7 @@ import { buildDefaultMap, buildCustomMap, blankEditorMap } from './map.js';
 import { openEditor, setDeployHandler, isEditorOpen } from './editor.js';
 import { loadSourceMap } from './sourcemap_load.js';
 import { meshBackend } from './sourcemap.js';
+import { setListener, sfxScope, unlockAudio } from './sfx.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
 const $ = s => document.querySelector(s);
@@ -94,11 +95,12 @@ addEventListener('mousemove', e => {
 function onRMB() {
   const human = refs.human; if (!human.alive) return;
   const w = WEAPONS[human.cur];
-  if (w.scope) human.scoped = !human.scoped;
+  if (w.scope) { human.scoped = !human.scoped; sfxScope(); }
   else if (human.cur === "glock") { human.glockBurst = !human.glockBurst; showHint("Glock " + (human.glockBurst ? "burst" : "semi")); }
   else if (human.cur === "r8") human.fireMode = "fan";
 }
 renderer.domElement.addEventListener('click', () => {
+  unlockAudio();   // a user gesture lets the WebAudio context start
   if (GAME.phase === "warmup" || GAME.phase === "editor" || anyPanelOpen()) return;
   if (refs.human && !refs.human.alive && !spec.free) cycleSpec(1);   // spectating locked: click switches player
   renderer.domElement.requestPointerLock();
@@ -248,6 +250,7 @@ export function step(dt) {
 function updateCamera() {
   const human = refs.human;
   if (human.alive) {
+    setListener(human.pos.x, human.pos.z, human.yaw, human);
     const scopedNow = human.scoped && WEAPONS[human.cur] && WEAPONS[human.cur].scope;
     const tp = GAME.thirdPerson;
     const fov = (scopedNow && !tp) ? 40 : 74;
@@ -276,10 +279,13 @@ function updateCamera() {
     if (vm.current) vm.current.visible = false;
     if (Math.abs(camera.fov - 74) > 0.5) { camera.fov = 74; camera.updateProjectionMatrix(); }
     if (spec.free) {                                          // free-fly spectator
+      setListener(spec.pos.x, spec.pos.z, spec.yaw, null);
       camera.position.copy(spec.pos); camera.rotation.set(spec.pitch, spec.yaw, 0, 'YXZ');
     } else {                                                  // locked on a player
       ensureSpec(); const t = spec.target;
       if (t) {
+        setListener(t.pos.x, t.pos.z, t.yaw, t);
+        t.body.g.visible = spec.tp;                           // first-person spectate hides the spectated player's own model (shown only in 3p)
         if (spec.tp) {                                        // third person of the spectated player (wall-aware pull-in)
           const ex = t.pos.x, ey = t.eye, ez = t.pos.z;
           const vx = Math.sin(t.yaw) * 130, vy = 30, vz = Math.cos(t.yaw) * 130, vl = Math.hypot(vx, vy, vz), ux = vx / vl, uy = vy / vl, uz = vz / vl;

@@ -14,7 +14,7 @@ scene.add(camera);  // so the first-person weapon viewmodel (a child of camera) 
 
 export const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance" });
 renderer.setSize(innerWidth, innerHeight);
-renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setPixelRatio(Math.min(devicePixelRatio, 1.5));   // cap retina cost: 2.0 -> 4x fragments, 1.5 -> 2.25x
 renderer.shadowMap.enabled = true; renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 app.appendChild(renderer.domElement);
 

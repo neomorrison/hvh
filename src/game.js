@@ -11,6 +11,7 @@ import { botBuy } from './ai.js';
 import { agents, refs, GAME, FREEZE_TIME, ROUND_TIME, END_TIME, BUY_TIME } from './state.js';
 import { meshBackend } from './sourcemap.js';
 import { clearEffects, addExplosion, smokes, fires, nadeProjectiles } from './effects.js';
+import { sfxNade } from './sfx.js';
 import { centerMessage, showHint, updateAllHUD, updateHUDWeapons, addKillFeedText, damageFlash, doFlash, playBeep } from './hud.js';
 
 const $ = s => document.querySelector(s);
@@ -238,6 +239,7 @@ export function throwNade(a, nadeKey) {
   const m = new THREE.Mesh(new THREE.SphereGeometry(5, 8, 8), new THREE.MeshStandardMaterial({ color: kind === "he" ? 0x3a5a2a : kind === "flash" ? 0xcccccc : kind === "smoke" ? 0x556 : 0x884422 }));
   m.position.copy(o); scene.add(m);
   nadeProjectiles.push({ m, pos: o.clone(), vel, kind, owner: a, t: 0 });
+  sfxNade('throw', a.pos);
   if (a.curNade === nadeKey && a.nades[nadeKey] <= 0) { const left = Object.keys(a.nades).filter(k => a.nades[k] > 0); a.curNade = left[0] || null; }
   updateHUDWeapons();
   return true;
@@ -255,7 +257,7 @@ export function updateNades(dt) {
   for (let i = nadeProjectiles.length - 1; i >= 0; i--) {
     const n = nadeProjectiles[i];
     n.vel.y -= GRAVITY * dt; n.pos.addScaledVector(n.vel, dt); n.t += dt;
-    if (n.pos.y < 5) { n.pos.y = 5; n.vel.y *= -0.4; n.vel.x *= 0.6; n.vel.z *= 0.6; }
+    if (n.pos.y < 5) { if (n.vel.y < -120) sfxNade('bounce', n.pos); n.pos.y = 5; n.vel.y *= -0.4; n.vel.x *= 0.6; n.vel.z *= 0.6; }
     n.m.position.copy(n.pos);
     const detonate = (n.kind === "he" || n.kind === "flash") ? n.t > 1.6 : n.t > 1.2;
     if (detonate) { detonateNade(n); scene.remove(n.m); nadeProjectiles.splice(i, 1); }
@@ -264,6 +266,7 @@ export function updateNades(dt) {
 function detonateNade(n) {
   if (n.kind === "he") {
     addExplosion(n.pos, 0xff8030, 160);
+    sfxNade('detonate', n.pos);
     for (const t of agents) {
       if (!t.alive) continue; const d = t.pos.distanceTo(n.pos);
       if (d < 300 && losClear(n.pos, hitboxCenter(t, "chest"), false)) {
