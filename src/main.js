@@ -28,6 +28,22 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
 const $ = s => document.querySelector(s);
 
+// spectator camera: lock onto a player (first/third person) or free-fly (Space toggles)
+const spec = { free: false, target: null, tp: false, pos: new THREE.Vector3(), yaw: 0, pitch: 0 };
+function specAliveList() { return agents.filter(a => a.alive); }
+function cycleSpec(dir) { const l = specAliveList(); if (!l.length) { spec.target = null; return; } let i = l.indexOf(spec.target); i = (i < 0 ? 0 : i + dir); spec.target = l[((i % l.length) + l.length) % l.length]; }
+function ensureSpec() { if (!spec.target || !spec.target.alive) cycleSpec(1); }
+function specUpdate() {
+  if (!spec.free) { ensureSpec(); return; }
+  const sp = (keys["ShiftLeft"] ? 18 : 8), cp = Math.cos(spec.pitch);
+  const fwd = new THREE.Vector3(-Math.sin(spec.yaw) * cp, Math.sin(spec.pitch), -Math.cos(spec.yaw) * cp);
+  const right = new THREE.Vector3(Math.cos(spec.yaw), 0, -Math.sin(spec.yaw));
+  if (keys["KeyW"]) spec.pos.addScaledVector(fwd, sp);
+  if (keys["KeyS"]) spec.pos.addScaledVector(fwd, -sp);
+  if (keys["KeyA"]) spec.pos.addScaledVector(right, -sp);
+  if (keys["KeyD"]) spec.pos.addScaledVector(right, sp);
+}
+
 /* ============================== input ============================== */
 addEventListener('keydown', e => {
   if (e.code === "KeyI" && GAME.phase !== "editor") { toggleCheatMenu(); e.preventDefault(); return; }
@@ -36,13 +52,21 @@ addEventListener('keydown', e => {
   keys[e.code] = true;
   if (e.code === "KeyB") { const p = $("#buyPanel"); p.classList.contains("show") ? closeBuy() : openBuy(); }
   if (e.code === "Tab") { $("#sbPanel").classList.add("show"); renderScoreboard(); e.preventDefault(); }
-  if (e.code === "Digit1") { human.equippedNade = null; if (human.slotSecondary) switchTo(human, human.slotSecondary); }
-  if (e.code === "Digit2") { human.equippedNade = null; if (human.slotPrimary) switchTo(human, human.slotPrimary); }
-  if (e.code === "Digit3") { human.equippedNade = null; switchTo(human, 'knife'); }
-  if (e.code === "Digit4" || e.code === "KeyG") { equipGrenade(); }
+  if (e.code === "Digit1") { human.equippedNade = null; if (human.slotPrimary) switchTo(human, human.slotPrimary); }    // 1 = rifle/primary
+  if (e.code === "Digit2") { human.equippedNade = null; if (human.slotSecondary) switchTo(human, human.slotSecondary); } // 2 = pistol/secondary
+  if (e.code === "Digit3") { human.equippedNade = null; switchTo(human, 'knife'); }                                    // 3 = knife
+  if (e.code === "Digit4" || e.code === "KeyG") { equipGrenade(); }                                                    // 4 = grenade
   if (e.code === "KeyR") { startReload(human); }
   if (e.code === "KeyE") { tryRescueInteract(human); }
-  if (e.code === "KeyV") { GAME.thirdPerson = !GAME.thirdPerson; showHint("Third person " + (GAME.thirdPerson ? "ON" : "OFF")); }
+  if (e.code === "KeyV") {
+    if (human.alive) { GAME.thirdPerson = !GAME.thirdPerson; showHint("Third person " + (GAME.thirdPerson ? "ON" : "OFF")); }
+    else { spec.tp = !spec.tp; showHint("Spectator " + (spec.tp ? "third" : "first") + " person"); }     // V while spectating a player
+  }
+  if (e.code === "Space" && !human.alive && !e.repeat) {                                                  // spectate: Space toggles free-fly cam
+    spec.free = !spec.free;
+    if (spec.free) { spec.pos.copy(camera.position); const t = spec.target; if (t) { spec.yaw = t.yaw; spec.pitch = t.pitch; } }
+    showHint(spec.free ? "Free cam — WASD/Shift to fly, mouse to look, Space to lock onto a player" : "Locked — click to switch player, V for third person");
+  }
   const c = human.cheats;
   if (e.code === "F1") { c.aimbot.on = !c.aimbot.on; showHint("Aimbot " + (c.aimbot.on ? "ON" : "OFF")); syncCheatUI(); }
   if (e.code === "F2") { c.aimbot.forceBody = !c.aimbot.forceBody; showHint("Force baim " + (c.aimbot.forceBody ? "ON" : "OFF")); syncCheatUI(); }
@@ -62,10 +86,10 @@ renderer.domElement.addEventListener('mousedown', e => { if (e.button === 0) { i
 addEventListener('mouseup', e => { if (e.button === 0) input.mouseDown = false; if (e.button === 2) input.rmbDown = false; });
 addEventListener('contextmenu', e => e.preventDefault());
 addEventListener('mousemove', e => {
-  if (document.pointerLockElement !== renderer.domElement || !refs.human || !refs.human.alive) return;
+  if (document.pointerLockElement !== renderer.domElement || !refs.human) return;
   const sens = 0.0022;
-  refs.human.yaw -= e.movementX * sens; refs.human.pitch -= e.movementY * sens;
-  refs.human.pitch = THREE.MathUtils.clamp(refs.human.pitch, -1.5, 1.5);
+  if (refs.human.alive) { refs.human.yaw -= e.movementX * sens; refs.human.pitch = THREE.MathUtils.clamp(refs.human.pitch - e.movementY * sens, -1.5, 1.5); }
+  else if (spec.free) { spec.yaw -= e.movementX * sens; spec.pitch = THREE.MathUtils.clamp(spec.pitch - e.movementY * sens, -1.5, 1.5); }   // spectator free-cam look
 });
 function onRMB() {
   const human = refs.human; if (!human.alive) return;
@@ -74,7 +98,11 @@ function onRMB() {
   else if (human.cur === "glock") { human.glockBurst = !human.glockBurst; showHint("Glock " + (human.glockBurst ? "burst" : "semi")); }
   else if (human.cur === "r8") human.fireMode = "fan";
 }
-renderer.domElement.addEventListener('click', () => { if (GAME.phase !== "warmup" && GAME.phase !== "editor" && !anyPanelOpen()) renderer.domElement.requestPointerLock(); });
+renderer.domElement.addEventListener('click', () => {
+  if (GAME.phase === "warmup" || GAME.phase === "editor" || anyPanelOpen()) return;
+  if (refs.human && !refs.human.alive && !spec.free) cycleSpec(1);   // spectating locked: click switches player
+  renderer.domElement.requestPointerLock();
+});
 
 /* ============================== human control ============================== */
 function humanMove(dt) {
@@ -94,8 +122,11 @@ function humanMove(dt) {
   // min-damage + min-hit-chance + firable predicate as auto-shoot (canShoot). We judge it
   // with velocity zeroed so the moving-bloom doesn't keep it from ever engaging while running.
   if (c.aimbot.on && c.aimbot.autoStop && human.onGround) {
+    const w = WEAPONS[human.cur];
+    // don't keep planting between shots on a slow non-auto (SSG/scout bolt cycle) — only stop when actually able to fire now
+    const fireReady = human.fireCd <= 0 || (w && w.auto);
     const vx = human.vel.x, vz = human.vel.z; human.vel.x = 0; human.vel.z = 0;
-    if (canShoot(human).ok) human.speedScale = 0;
+    if (fireReady && canShoot(human).ok) human.speedScale = 0;
     human.vel.x = vx; human.vel.z = vz;
   }
   moveAgent(human, dir, dt, false);
@@ -181,6 +212,7 @@ export function step(dt) {
   if (GAME.phase === "buy") { GAME.freeze -= dt; if (GAME.freeze <= 0) beginBuyToLive(); }
   else if (GAME.phase === "live") { GAME.timer -= dt; if (GAME.timer <= 0) awardWin(TEAM.T, "time"); }
   else if (GAME.phase === "end") { GAME.timer -= dt; if (GAME.timer <= 0) endRoundAdvance(); }
+  if (GAME.buyTimer > 0 && (GAME.phase === "buy" || GAME.phase === "live")) { GAME.buyTimer -= dt; if (GAME.buyTimer <= 0 && $("#buyPanel").classList.contains("show")) closeBuy(); }   // buying allowed past freeze, then auto-close
 
   for (const a of agents) {
     if (a.fireCd > 0) a.fireCd -= dt;
@@ -196,7 +228,7 @@ export function step(dt) {
   if (human.alive && GAME.phase !== "end") {
     humanMove(dt);
     if (GAME.phase === "live") humanShoot(dt);
-  }
+  } else if (!human.alive) specUpdate();   // spectator camera (free-fly / locked)
   const canAct = GAME.phase === "live";
   for (const a of agents) {
     if (a.isHuman) continue;
@@ -242,8 +274,20 @@ function updateCamera() {
     }
   } else {
     if (vm.current) vm.current.visible = false;
-    const mate = agents.find(a => a.alive && a.team === human.team && !a.isHuman) || agents.find(a => a.alive);
-    if (mate) { camera.position.set(mate.pos.x, mate.eye + 10, mate.pos.z); camera.rotation.set(mate.pitch, mate.yaw, 0, 'YXZ'); }
+    if (Math.abs(camera.fov - 74) > 0.5) { camera.fov = 74; camera.updateProjectionMatrix(); }
+    if (spec.free) {                                          // free-fly spectator
+      camera.position.copy(spec.pos); camera.rotation.set(spec.pitch, spec.yaw, 0, 'YXZ');
+    } else {                                                  // locked on a player
+      ensureSpec(); const t = spec.target;
+      if (t) {
+        if (spec.tp) {                                        // third person of the spectated player (wall-aware pull-in)
+          const ex = t.pos.x, ey = t.eye, ez = t.pos.z;
+          const vx = Math.sin(t.yaw) * 130, vy = 30, vz = Math.cos(t.yaw) * 130, vl = Math.hypot(vx, vy, vz), ux = vx / vl, uy = vy / vl, uz = vz / vl;
+          let allow = vl; if (meshBackend.active && meshBackend.bvh) { const h = meshBackend.bvh.raycast(ex, ey, ez, ux, uy, uz, vl); if (h) allow = Math.max(18, h.t - 12); }
+          camera.position.set(ex + ux * allow, ey + uy * allow, ez + uz * allow); camera.rotation.set(t.pitch, t.yaw, 0, 'YXZ');
+        } else { camera.position.set(t.pos.x, t.eye, t.pos.z); camera.rotation.set(t.pitch, t.yaw, 0, 'YXZ'); }
+      }
+    }
   }
 }
 function render() { renderer.render(scene, camera); }

@@ -13,13 +13,13 @@ export const GAME = {
   phase: "warmup",       // warmup | idle | buy | live | end | matchend | editor | frozen
   round: 1, half: 1, scoreCT: 0, scoreT: 0,
   humanTeam: TEAM.CT, ctIsHuman: true,
-  lossStreak: { CT: 0, T: 0 }, timer: 0, freeze: 0, thirdPerson: false,
+  lossStreak: { CT: 0, T: 0 }, timer: 0, freeze: 0, buyTimer: 0, thirdPerson: false,
   hostages: [], rescued: 0, winner: null, roundResult: "",
   customMap: null,       // active custom map data, or null for cs_office
   sourceMap: null,       // name of an imported CS2 .glb map, or null
 };
 
-export const FREEZE_TIME = 12, ROUND_TIME = 115, END_TIME = 5;
+export const FREEZE_TIME = 5, ROUND_TIME = 115, END_TIME = 5, BUY_TIME = 15;   // freeze/buy-phase 5s; buying allowed 15s into the round
 
 export const keys = {};
 export const input = { mouseDown: false, rmbDown: false };

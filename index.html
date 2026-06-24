@@ -100,6 +100,8 @@
   .buyitem { background:#171c25; border:1px solid #2a3340; border-radius:7px; padding:10px 12px; cursor:pointer; pointer-events:auto; transition:.12s; }
   .buyitem:hover { border-color:#4a90ff; background:#1b2230; }
   .buyitem.cant { opacity:.4; cursor:not-allowed; }
+  .buyitem.owned { border-color:#46d35f; box-shadow:0 0 0 1px #46d35f inset; background:#16241a; }
+  .buyitem.owned::after { content:"OWNED · right-click to sell"; display:block; font-size:9px; color:#46d35f; margin-top:3px; letter-spacing:.3px; }
   .buyitem .bn { font-weight:bold; font-size:14px; display:flex; justify-content:space-between; }
   .buyitem .bp { color:#46d35f; font-size:13px; }
   .buyitem .bd { font-size:11px; color:#8b94a3; margin-top:3px; }
