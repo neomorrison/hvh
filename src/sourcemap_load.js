@@ -34,7 +34,7 @@ export function loadSourceMap(glbBuffer, spawns, texturedScene) {
     texturedScene.scale.setScalar(39.3701);                   // VRF metres → source units; aligns with collision/spawns
     texturedScene.traverse(o => {
       if (!o.isMesh) return;
-      o.castShadow = true; o.receiveShadow = true; if (o.material) o.material.side = THREE.DoubleSide;
+      o.castShadow = false; o.receiveShadow = true; if (o.material) o.material.side = THREE.DoubleSide;   // map is pre-lit + static → only agents cast dynamic shadows (cheap shadow pass)
       if (/rolling_gate/i.test(o.name || '')) o.visible = false;   // CT-spawn garage is walk-through now → hide its door so it reads as open
     });
     addMapObject(texturedScene);
@@ -185,12 +185,15 @@ function setupSky(b) {
 // standable interior floors), sitting at the ceiling above each (or a default height).
 function addCeilingLights() {
   const placed = [];
-  for (let i = 0; i < NODES.length && placed.length < 46; i += 3) {
+  // FEW, widely-spaced fill lights — every extra light is shaded per-fragment on every material,
+  // so 46 of them tanked the framerate (esp. at retina pixelRatio). The textures are already
+  // pre-lit; ~10 wide point lights give moving agents some local warmth without the cost.
+  for (let i = 0; i < NODES.length && placed.length < 10; i += 5) {
     const n = NODES[i];
-    if (placed.some(p => p.distanceToSquared(n.p) < 420 * 420)) continue;                   // keep them spread out
+    if (placed.some(p => p.distanceToSquared(n.p) < 760 * 760)) continue;                    // keep them spread out
     const up = meshBackend.bvh.raycast(n.p.x, n.y + 24, n.p.z, 0, 1, 0, 600);
     const cy = (up && up.t < 600) ? n.y + 24 + up.t - 12 : n.y + 96;                        // just under the ceiling, else a default height
-    const pl = new THREE.PointLight(0xffe2b0, 0.65, 720, 1.7);
+    const pl = new THREE.PointLight(0xffe2b0, 0.85, 1300, 1.5);
     pl.position.set(n.p.x, cy, n.p.z); addMapObject(pl);
     placed.push(n.p.clone());
   }

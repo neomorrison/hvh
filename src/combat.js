@@ -13,6 +13,7 @@ import { hitboxes, hitboxCenter, eyePos, setViewmodel } from './agents.js';
 import { agents } from './state.js';
 import { addTracer, addImpact } from './effects.js';
 import { hitmarker, playHitmarker, addHitLog, damageFlash, updateHUDWeapons, playShot, playBeep, showHint, addKillFeed } from './hud.js';
+import { sfxFire, sfxReloadStart, sfxReloadEnd, sfxDraw, sfxHitmarker, sfxKnife, sfxImpact } from './sfx.js';
 import { checkRoundEnd, onHumanDeath } from './game.js';
 
 /* live aim cone (half-angle radians) — faithful CS2 inaccuracy model */
@@ -190,7 +191,7 @@ export function applyHit(shooter, target, group, dist, throughWall) {
     target.pitch = THREE.MathUtils.clamp(target.pitch - kick, -1.5, 1.5);
     target.yaw += (Math.random() - 0.5) * kick * 1.4;
   }
-  if (shooter.isHuman) { hitmarker(group === "head"); playHitmarker(group === "head"); addHitLog(group === "head" ? ("headshot for " + applied) : ("hit for " + applied), group === "head" ? "hs" : "hit"); }
+  if (shooter.isHuman) { hitmarker(group === "head"); sfxHitmarker(group === "head", target.armor > 0 || target.helmet); addHitLog(group === "head" ? ("headshot for " + applied) : ("hit for " + applied), group === "head" ? "hs" : "hit"); }
   if (target.hp <= 0) killAgent(shooter, target, group, wkey);
   return applied;
 }
@@ -221,7 +222,7 @@ export function fireWeaponCommon(a) {
   a.lastShot = performance.now();
   const I = INACC[a.cur]; if (I) { a.firePenalty = Math.min(I.max, (a.firePenalty || 0) + I.fire); }
   if (a.cur === "r8" && a.fireMode === "fan") a.firePenalty = (a.firePenalty || 0) + 30;
-  playShot(a.cur);
+  sfxFire(a);
 }
 
 export function hasAnyAmmo(a) { for (const k of [a.slotPrimary, a.slotSecondary]) { if (k && a.weapons[k] && ((a.weapons[k].ammo || 0) > 0 || (a.weapons[k].reserve || 0) > 0)) return true; } return false; }
@@ -235,7 +236,7 @@ export function manualFire(a) {
   let spread = computeBloom(a);
   if (a.cur === "r8" && a.fireMode === "fan") spread += 0.06;
   dir.x += (Math.random() - 0.5) * spread; dir.y += (Math.random() - 0.5) * spread; dir.z += (Math.random() - 0.5) * spread; dir.normalize();
-  if (meshBackend.active) meshBackend.breakWindowsAlong(origin.x, origin.y, origin.z, dir.x, dir.y, dir.z, 9000);   // shatter glass in the line of fire
+  if (meshBackend.active) { const brk = meshBackend.breakWindowsAlong(origin.x, origin.y, origin.z, dir.x, dir.y, dir.z, 9000); if (brk && brk.center) sfxImpact(brk.center, true); }   // shatter glass in the line of fire
   // nearest enemy hitbox along the ray (walls accounted for afterwards via penetration)
   let best = null, bd = 9000, bg = null;
   for (const t of agents) {
@@ -292,7 +293,7 @@ export function aimbotFire(a) {
   const dist = me.distanceTo(cs.aimPoint);
   fireWeaponCommon(a);
   addTracer(me.clone().add(dirTo.clone().multiplyScalar(40)), cs.aimPoint);
-  if (meshBackend.active) meshBackend.breakWindowsAlong(me.x, me.y, me.z, dirTo.x, dirTo.y, dirTo.z, dist + 60);   // shatter glass in the line of fire
+  if (meshBackend.active) { const brk = meshBackend.breakWindowsAlong(me.x, me.y, me.z, dirTo.x, dirTo.y, dirTo.z, dist + 60); if (brk && brk.center) sfxImpact(brk.center, true); }   // shatter glass in the line of fire
   // human lands at pure bloom accuracy (already past the min-hit-chance gate); a bot lands at
   // min(accuracy, persona skill) so distance/movement still matter but skilled bots stay lethal.
   const hitProb = a.isHuman ? cs.hitChance : Math.min(cs.hitChance, (cb.aimbot.hitchance || 100) / 100);
@@ -309,7 +310,7 @@ export function aimbotFire(a) {
 export function meleeAttack(a, stab) {
   if (a.fireCd > 0) return false;
   const w = WEAPONS.knife; a.fireCd = stab ? w.stabCd : w.slashCd; a.lastShot = performance.now();
-  playShot('knife');
+  sfxKnife(a, false);   // swing
   const fwd = new THREE.Vector3(-Math.sin(a.yaw), 0, -Math.cos(a.yaw));
   const me = eyePos(a); let best = null, bd = w.knifeRange;
   for (const t of agents) {
@@ -329,7 +330,8 @@ export function meleeAttack(a, stab) {
   best.hp -= dmg; best.lastDamageFrom = a;
   best.hurtBloom = Math.min(70, (best.hurtBloom || 0) + dmg);
   if (best.isHuman) { damageFlash(dmg); best.hitFlash = 0.3; }
-  if (a.isHuman) { hitmarker(back); playBeep(back ? 900 : 560, 0.05); }
+  sfxKnife(a, true);   // connect
+  if (a.isHuman) hitmarker(back);
   if (best.hp <= 0) killAgent(a, best, "chest", "knife");
   return true;
 }
@@ -342,17 +344,19 @@ export function giveWeapon(a, key) {
   selectBest(a);
 }
 export function selectBest(a) { a.cur = a.slotPrimary || a.slotSecondary; a.scoped = false; if (a.isHuman) { a.equippedNade = null; setViewmodel(a.cur, false); } }
-export function switchTo(a, key) { if (a.weapons[key]) { a.cur = key; a.scoped = false; a.reloadT = 0; if (a.isHuman) { a.equippedNade = null; setViewmodel(key, false); } updateHUDWeapons(); } }
+export function switchTo(a, key) { if (a.weapons[key]) { a.cur = key; a.scoped = false; a.reloadT = 0; if (a.isHuman) { a.equippedNade = null; setViewmodel(key, false); sfxDraw(a); } updateHUDWeapons(); } }
 export function startReload(a) {
   if (a.reloadT > 0) return;
   const w = WEAPONS[a.cur]; if (!w || w.melee) return;
   const wp = a.weapons[a.cur]; if (!wp || wp.reserve <= 0 || wp.ammo >= w.mag) { if (a.isHuman && wp && wp.reserve <= 0 && wp.ammo <= 0) showHint("Out of ammo — press 3 for knife"); return; }
   a.reloadT = w.reload; a.reloadTotal = w.reload; a.scoped = false;
   a._reloadFor = a.cur;
+  sfxReloadStart(a);
 }
 export function finishReload(a) {
   const key = a._reloadFor; const w = WEAPONS[key], wp = a.weapons[key]; if (!wp) return;
   const need = w.mag - wp.ammo; const take = Math.min(need, wp.reserve);
   wp.ammo += take; wp.reserve -= take;
+  sfxReloadEnd(a);
   if (a.isHuman) updateHUDWeapons();
 }
