@@ -23,7 +23,7 @@ import { toggleCheatMenu, buildCheatMenu, loadConfig, saveConfig, syncCheatUI } 
 import { buildDefaultMap } from './map.js';
 import { loadSourceMap } from './sourcemap_load.js';
 import { meshBackend } from './sourcemap.js';
-import { setListener, sfxScope, unlockAudio } from './sfx.js';
+import { setListener, sfxScope, unlockAudio, sfxRevolverCock } from './sfx.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
 const $ = s => document.querySelector(s);
@@ -173,25 +173,30 @@ function humanShoot(dt) {
     const wp8 = human.weapons.r8; if (!wp8) return; const c8 = human.cheats; const COCK = WEAPONS.r8.cockTime || 0.4;
     if (rmb) {
       human.r8Charge = 0;
-      if (human.fireCd <= 0) { if (wp8.ammo <= 0) { startReload(human); return; } human.fireMode = "fan"; fireWeaponCommon(human); manualFire(human); updateHUDWeapons(); }
+      if (human.fireCd <= 0) { if (wp8.ammo <= 0) { startReload(human); return; } human.fireMode = "fan"; sfxRevolverCock(); fireWeaponCommon(human); manualFire(human); updateHUDWeapons(); }   // fan: cock + fire each shot (spams the cock)
       return;
     }
     if (c8.aimbot.on && c8.aimbot.autoRevolver) {
-      human.r8Charge = Math.min(0.97, (human.r8Charge || 0) + dt / COCK);
-      if (human.fireCd <= 0 && human.r8Charge >= 0.9) { if (wp8.ammo <= 0) { startReload(human); return; } human.fireMode = "primary"; human.r8Charge = 1; if (aimbotFire(human)) human.r8Charge = 0; updateHUDWeapons(); }
+      // pre-cock the hammer almost fully (up to 0.99) and HOLD, so when a shot qualifies it fires
+      // near-instantly; play the cock sound once each time the hammer reaches back.
+      human.r8Charge = Math.min(0.99, (human.r8Charge || 0) + dt / COCK);
+      if (human.r8Charge >= 0.95 && !human.r8Cocked) { human.r8Cocked = true; sfxRevolverCock(); }
+      if (human.fireCd <= 0 && human.r8Charge >= 0.95) { if (wp8.ammo <= 0) { startReload(human); return; } human.fireMode = "primary"; if (aimbotFire(human)) { human.r8Charge = 0; human.r8Cocked = false; } updateHUDWeapons(); }
       return;
     }
     if (c8.aimbot.on) {
       if (md || c8.aimbot.autoShoot) {
         human.r8Charge = Math.min(1, (human.r8Charge || 0) + dt / COCK);
-        if (human.r8Charge >= 1 && human.fireCd <= 0) { if (wp8.ammo <= 0) { startReload(human); return; } human.fireMode = "primary"; if (aimbotFire(human)) human.r8Charge = 0; updateHUDWeapons(); }
-      } else human.r8Charge = Math.max(0, (human.r8Charge || 0) - dt / COCK * 2);
+        if (human.r8Charge >= 0.95 && !human.r8Cocked) { human.r8Cocked = true; sfxRevolverCock(); }
+        if (human.r8Charge >= 1 && human.fireCd <= 0) { if (wp8.ammo <= 0) { startReload(human); return; } human.fireMode = "primary"; if (aimbotFire(human)) { human.r8Charge = 0; human.r8Cocked = false; } updateHUDWeapons(); }
+      } else { human.r8Charge = Math.max(0, (human.r8Charge || 0) - dt / COCK * 2); human.r8Cocked = false; }
       return;
     }
     if (md) {
       human.r8Charge = Math.min(1, (human.r8Charge || 0) + dt / COCK);
-      if (human.r8Charge >= 1 && human.fireCd <= 0) { if (wp8.ammo <= 0) { startReload(human); human.r8Charge = 0; return; } human.fireMode = "primary"; fireWeaponCommon(human); manualFire(human); human.r8Charge = 0; updateHUDWeapons(); }
-    } else human.r8Charge = Math.max(0, (human.r8Charge || 0) - dt / COCK * 2);
+      if (human.r8Charge >= 0.95 && !human.r8Cocked) { human.r8Cocked = true; sfxRevolverCock(); }
+      if (human.r8Charge >= 1 && human.fireCd <= 0) { if (wp8.ammo <= 0) { startReload(human); human.r8Charge = 0; human.r8Cocked = false; return; } human.fireMode = "primary"; fireWeaponCommon(human); manualFire(human); human.r8Charge = 0; human.r8Cocked = false; updateHUDWeapons(); }
+    } else { human.r8Charge = Math.max(0, (human.r8Charge || 0) - dt / COCK * 2); human.r8Cocked = false; }
     return;
   }
   if (human.fireCd > 0 || human.reloadT > 0) return;
@@ -202,12 +207,16 @@ function humanShoot(dt) {
     if (aimbotFire(human)) { updateHUDWeapons(); return; }
   }
   const r8fan = human.cur === "r8" && rmb;
-  if (md || r8fan || (human.glockBurst && human.burstQ > 0)) {
+  const glockBurst = human.cur === "glock" && human.glockBurst;
+  if (md || r8fan || (glockBurst && human.burstQ > 0)) {
     if (wp.ammo <= 0) { startReload(human); return; }
     human.fireMode = r8fan ? "fan" : "primary";
     fireWeaponCommon(human); manualFire(human);
-    if (human.cur === "glock" && human.glockBurst) human.burstQ = human.burstQ > 0 ? human.burstQ - 1 : 2;
-    if (!WEAPONS[human.cur].auto && !human.glockBurst && !r8fan) input.mouseDown = false;  // semi-auto: one click one shot
+    if (glockBurst) {
+      human.burstQ = human.burstQ > 0 ? human.burstQ - 1 : 2;     // 3-round burst (this shot + 2 queued)
+      human.fireCd = human.burstQ > 0 ? 0.07 : 0.4;               // rapid within the burst, then a gap before the next
+      input.mouseDown = false;                                     // one click = one burst (the queue fires the rest)
+    } else if (!WEAPONS[human.cur].auto && !r8fan) input.mouseDown = false;  // semi-auto: one click one shot
     updateHUDWeapons();
   }
 }

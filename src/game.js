@@ -11,7 +11,7 @@ import { botBuy } from './ai.js';
 import { agents, refs, GAME, FREEZE_TIME, ROUND_TIME, END_TIME, BUY_TIME } from './state.js';
 import { meshBackend } from './sourcemap.js';
 import { clearEffects, addExplosion, smokes, fires, nadeProjectiles } from './effects.js';
-import { sfxNade } from './sfx.js';
+import { sfxNade, sfxEquip } from './sfx.js';
 import { centerMessage, showHint, updateAllHUD, updateHUDWeapons, addKillFeedText, damageFlash, doFlash, playBeep } from './hud.js';
 
 const $ = s => document.querySelector(s);
@@ -158,7 +158,7 @@ export function buildBuyMenu() {
   for (const k of ["glock", "usp", "duals", "deagle", "r8"]) if (WEAPONS[k].side === "both" || sideAllows(k)) items.push({ type: "w", k });
   for (const k of ["ssg", "scar", "g3"]) if (WEAPONS[k].side === "both" || sideAllows(k)) items.push({ type: "w", k });
   items.push({ type: "armor", k: "kevlar" }); items.push({ type: "armor", k: "kevhelm" });
-  for (const k of ["he", "flash", "smoke", "molly", "inc"]) { const n = NADES[k]; if (!n.side || n.side === human.team) items.push({ type: "nade", k }); }
+  for (const k of ["he", "smoke", "molly", "inc"]) { const n = NADES[k]; if (!n.side || n.side === human.team) items.push({ type: "nade", k }); }
   const keymap = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "q", "w", "e", "r", "t", "y", "u"];
   items.forEach((it, i) => {
     const el = document.createElement("div"); el.className = "buyitem";
@@ -217,7 +217,7 @@ export function buyItem(it) {
     giveWeapon(human, it.k); switchTo(human, it.k);
     human.money -= w.cost;
     human.boughtThisBuy[slotName] = { key: it.k, cost: w.cost };
-    refreshBuyAfford(); updateAllHUD(); playBeep(700, 0.05);
+    refreshBuyAfford(); updateAllHUD(); playBeep(700, 0.05); sfxEquip();
     return;
   }
   if (it.type === "nade" && human.nades[it.k] > 0) { showHint("Already have a " + NADES[it.k].name); return; }   // one of each grenade
@@ -225,7 +225,7 @@ export function buyItem(it) {
   if (human.money < cost) { showHint("Not enough money"); return; }
   if (it.type === "armor") { human.armor = 100; if (it.k === "kevhelm") human.helmet = true; }
   else { human.nades[it.k] = 1; human.curNade = it.k; }
-  human.money -= cost; refreshBuyAfford(); updateAllHUD(); playBeep(700, 0.05);
+  human.money -= cost; refreshBuyAfford(); updateAllHUD(); playBeep(700, 0.05); sfxEquip();
 }
 export function openBuy() { if (!canBuyNow()) { showHint("Buy time is over"); return; } buildBuyMenu(); $("#buyPanel").classList.add("show"); document.exitPointerLock(); }
 export function closeBuy() { $("#buyPanel").classList.remove("show"); if (GAME.phase !== "warmup" && !$("#cheatPanel").classList.contains("show")) renderer.domElement.requestPointerLock(); }
@@ -270,7 +270,7 @@ export function updateNades(dt) {
     n.vel.y -= GRAVITY * dt; n.pos.addScaledVector(n.vel, dt); n.t += dt;
     if (n.pos.y < 5) { if (n.vel.y < -120) sfxNade('bounce', n.pos); n.pos.y = 5; n.vel.y *= -0.4; n.vel.x *= 0.6; n.vel.z *= 0.6; }
     n.m.position.copy(n.pos);
-    const detonate = (n.kind === "he" || n.kind === "flash") ? n.t > 1.6 : n.t > 1.2;
+    const detonate = (n.kind === "he") ? n.t > 1.6 : n.t > 1.2;
     if (detonate) { detonateNade(n); scene.remove(n.m); nadeProjectiles.splice(i, 1); }
   }
 }
@@ -283,17 +283,6 @@ function detonateNade(n) {
       if (d < 300 && losClear(n.pos, hitboxCenter(t, "chest"), false)) {
         let dmg = Math.round(98 * (1 - d / 300));
         if (dmg > 0) { t.armor = Math.max(0, t.armor - dmg * 0.5); t.hp -= dmg; if (t.isHuman && t !== n.owner) damageFlash(dmg); if (t.hp <= 0) killAgent(n.owner, t, "chest", "he"); }
-      }
-    }
-  } else if (n.kind === "flash") {
-    addExplosion(n.pos, 0xffffff, 120);
-    for (const t of agents) {
-      if (!t.alive) continue; const d = t.pos.distanceTo(n.pos);
-      if (d < 700 && losClear(n.pos, eyePos(t), false)) {
-        const facing = new THREE.Vector3(0, 0, -1).applyEuler(new THREE.Euler(t.pitch, t.yaw, 0, 'YXZ'));
-        const to = n.pos.clone().sub(eyePos(t)).normalize(); const dot = facing.dot(to);
-        const amt = THREE.MathUtils.clamp((dot + 0.3), 0, 1) * (1 - d / 700);
-        t.flashT = Math.max(t.flashT, amt * 2.5); if (t === refs.human) doFlash(amt * 2.5);
       }
     }
   } else if (n.kind === "smoke") {
