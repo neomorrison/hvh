@@ -7,7 +7,7 @@ import { TEAM, ECON, WEAPONS, NADES, ARMOR, EYE_STAND, GRAVITY } from './data.js
 import { CT_SPAWNS, T_SPAWNS, HOSTAGE_SPAWNS, RESCUE_ZONES, losClear } from './world.js';
 import { spawnAgent, applyPersona, BOT_PERSONAS, recolorAgent, eyePos, hitboxCenter, setViewmodel } from './agents.js';
 import { giveWeapon, selectBest, switchTo, killAgent } from './combat.js';
-import { botBuy } from './ai.js';
+import { botBuy, restoreAllEdges } from './ai.js';
 import { agents, refs, GAME, FREEZE_TIME, ROUND_TIME, END_TIME, BUY_TIME } from './state.js';
 import { meshBackend } from './sourcemap.js';
 import { clearEffects, addExplosion, smokes, fires, nadeProjectiles } from './effects.js';
@@ -32,6 +32,7 @@ export function liveHostages() { return GAME.hostages.filter(h => !h.rescued && 
 export function startRound() {
   GAME.phase = "buy"; GAME.freeze = FREEZE_TIME; GAME.buyTimer = BUY_TIME; GAME.timer = ROUND_TIME; GAME.winner = null; GAME.rescued = 0;
   clearEffects();
+  restoreAllEdges();   // heal any nav edges bots temporarily cut last round — start every round fully connected
   const ctList = agents.filter(a => a.team === TEAM.CT), tList = agents.filter(a => a.team === TEAM.T);
   ctList.forEach((a, i) => resetAgentForRound(a, CT_SPAWNS[i % CT_SPAWNS.length]));
   tList.forEach((a, i) => resetAgentForRound(a, T_SPAWNS[i % T_SPAWNS.length]));
@@ -58,6 +59,7 @@ export function resetAgentForRound(a, spawn) {
   a.crouch = false; a.scoped = false; a.reloadT = 0; a.fireCd = 0; a.carrying = null; a.flashT = 0; a.hitFlash = 0;
   a.yaw = (spawn.yaw != null) ? spawn.yaw : (a.team === TEAM.CT ? -Math.PI / 2 : Math.PI / 2); a.pitch = 0; a.realYaw = a.yaw;
   a.equippedNade = null; a.firePenalty = 0; a.hurtBloom = 0; a.landBloom = 0; a.onGround = true;
+  a.aiPath = []; a.aiTimer = 0; a.aiStuck = 0; a.aiLastSeen = null; a.aiLastSeenT = 0; a.aiNoContact = 0;   // clear stale AI state so no bot chases a dead position
   a.boughtThisBuy = {};                                    // reset same-buy sellback tracking
   a.body.g.visible = true;
   a.weapons.knife = { melee: true }; a.slotMelee = 'knife';

@@ -37,8 +37,10 @@ function emit(b, vol, rate, pan) {
   try { src.start(); } catch (e) {}
 }
 /** play a sound by name (path under sfx/, no extension). */
+let ffMute = false;
+export function setSfxMute(on) { ffMute = on; }   // silence the extra fast-forward sim steps without touching the user's enabled toggle
 export function play(name, vol = 1, rate = 1, pan = 0) {
-  if (!enabled || !name) return;
+  if (!enabled || ffMute || !name) return;
   if (!ctx()) return;
   const b = buf.get(name);
   if (b) emit(b, vol, rate, pan); else load(name).then(bb => emit(bb, vol, rate, pan));

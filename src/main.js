@@ -17,13 +17,13 @@ import {
 import {
   updateAllHUD, updateTopHUD, updatePlayerHUD, updateBotBars, updateHUDWeapons, drawRadar,
   updateESP, updateReloadRing, updateBloomRing, updateScopeOverlay, updateR8Hammer,
-  renderScoreboard, centerMessage, showHint, showHintOnce, formatTime, buildCrosshair, anyPanelOpen, audio,
+  renderScoreboard, centerMessage, showHint, showHintOnce, formatTime, buildCrosshair, anyPanelOpen, audio, setBeepMute, playBeep,
 } from './hud.js';
 import { toggleCheatMenu, buildCheatMenu, loadConfig, saveConfig, syncCheatUI } from './cheats.js';
 import { buildDefaultMap } from './map.js';
 import { loadSourceMap } from './sourcemap_load.js';
 import { meshBackend } from './sourcemap.js';
-import { setListener, sfxScope, unlockAudio, sfxRevolverCock } from './sfx.js';
+import { setListener, sfxScope, unlockAudio, sfxRevolverCock, setSfxMute } from './sfx.js';
 import { toggleEditor, isEditorOpen, editorUpdate, editorRender, editorKey, loadPatches } from './editor.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
@@ -174,7 +174,7 @@ function humanShoot(dt) {
   }
   // R8 Revolver: primary = hold to cock, fires at full draw; RMB = fan
   if (human.cur === "r8" && human.reloadT <= 0) {
-    const wp8 = human.weapons.r8; if (!wp8) return; const c8 = human.cheats; const COCK = WEAPONS.r8.cockTime || 0.4;
+    const wp8 = human.weapons.r8; if (!wp8) return; const c8 = human.cheats; const COCK = WEAPONS.r8.cockTime || 0.25;
     if (rmb) {
       human.r8Charge = 0;
       if (human.fireCd <= 0) { if (wp8.ammo <= 0) { startReload(human); return; } human.fireMode = "fan"; sfxRevolverCock(); fireWeaponCommon(human); manualFire(human); updateHUDWeapons(); }   // fan: cock + fire each shot (spams the cock)
@@ -186,7 +186,7 @@ function humanShoot(dt) {
       // fires ONLY if a target is firable AT THAT INSTANT (aimbotFire re-checks canShoot, so a shot
       // lands only if the target is still firable after the cock time it took to get here). The
       // 0.199s cadence — not the R8's normal cooldown — paces the fire, so it beats a manual cock.
-      const AUTO_COCK = 0.199;
+      const AUTO_COCK = 0.25;
       human.r8Charge = (human.r8Charge || 0) + dt / AUTO_COCK;
       while (human.r8Charge >= 1) {                            // while (not if): a frame hitch never skips a cock
         human.r8Charge -= 1;                                   // immediately re-cock for the next cycle
@@ -237,14 +237,37 @@ function humanShoot(dt) {
 
 /* ============================== main loop ============================== */
 let last = performance.now();
+// When the human is dead and only bots are left in a live round, fast-forward the rest of the round
+// at 2.5x by running extra (silent) sim steps per frame, with an on-screen note. Auto-stops when the
+// round ends or the human respawns next round (the condition is derived, never latched).
+const ff = { accum: 0, banner: null, RATE: 2.5 };
+function ffShouldRun() { const h = refs.human; return GAME.phase === "live" && h && !h.alive; }
+function updateFFBanner() {
+  if (!ff.banner) {
+    ff.banner = document.createElement('div'); ff.banner.id = 'ffBanner';
+    ff.banner.style.cssText = 'position:fixed;left:0;right:0;top:64px;text-align:center;font:bold 15px "Trebuchet MS",sans-serif;color:#ffd86b;text-shadow:0 2px 6px #000;letter-spacing:.4px;pointer-events:none;z-index:50;';
+    ff.banner.textContent = '⏩ FAST-FORWARD 2.5× — simulating the round (all players dead)';
+    document.body.appendChild(ff.banner);
+  }
+  ff.banner.style.display = ffShouldRun() ? 'block' : 'none';
+}
 function loop(now) {
   requestAnimationFrame(loop);
   let dt = Math.min(0.05, (now - last) / 1000); last = now; clock.t += dt;
-  if (GAME.phase !== "warmup" && GAME.phase !== "editor") step(dt);
-  else if (isEditorOpen()) editorUpdate();
+  if (GAME.phase !== "warmup" && GAME.phase !== "editor") {
+    step(dt);                                                // one real-time step (audio, camera, HUD)
+    if (ffShouldRun()) {                                     // only bots left → speed through to the round's end
+      ff.accum += (ff.RATE - 1);
+      setSfxMute(true); setBeepMute(true);                   // extra sim steps are silent — no 2.5x gunfire spam
+      try { while (ff.accum >= 1 && ffShouldRun()) { step(dt, true); ff.accum -= 1; } }   // re-check each step: a kill that ends the round stops us instantly
+      finally { setSfxMute(false); setBeepMute(false); }     // never leave audio latched off, even if a step throws
+      if (GAME.phase === "end" && GAME.winner != null) playBeep(GAME.winner === GAME.humanTeam ? 660 : 200, 0.25);   // round ended mid-fast-forward → replay the (muted) win/loss cue
+    } else ff.accum = 0;
+  } else if (isEditorOpen()) editorUpdate();
+  updateFFBanner();
   render();
 }
-export function step(dt) {
+export function step(dt, extra) {
   if (GAME.phase === "buy") { GAME.freeze -= dt; if (GAME.freeze <= 0) beginBuyToLive(); }
   else if (GAME.phase === "live") { GAME.timer -= dt; if (GAME.timer <= 0) awardWin(TEAM.T, "time"); }
   else if (GAME.phase === "end") { GAME.timer -= dt; if (GAME.timer <= 0) endRoundAdvance(); }
@@ -261,10 +284,12 @@ export function step(dt) {
   }
 
   const human = refs.human;
-  if (human.alive && GAME.phase !== "end") {
-    humanMove(dt);
-    if (GAME.phase === "live") humanShoot(dt);
-  } else if (!human.alive) specUpdate();   // spectator camera (free-fly / locked)
+  if (!extra) {   // on fast-forward sim steps skip player/spectator input so the free-cam doesn't fly 2.5x
+    if (human.alive && GAME.phase !== "end") {
+      humanMove(dt);
+      if (GAME.phase === "live") humanShoot(dt);
+    } else if (!human.alive) specUpdate();   // spectator camera (free-fly / locked)
+  }
   const canAct = GAME.phase === "live";
   for (const a of agents) {
     if (a.isHuman) continue;

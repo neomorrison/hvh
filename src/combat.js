@@ -218,7 +218,7 @@ export function fireWeaponCommon(a) {
   wp.ammo--; a.fireCd = 60 / w.rpm;
   // R8 Revolver: real CS2 cadence — primary is a slow hammer-cock shot, the fan
   // is quicker but still gated (no more machine-gun revolver).
-  if (a.cur === "r8") a.fireCd = (a.fireMode === "fan") ? (w.cycleFan || 0.30) : (w.cyclePrimary || 0.40);
+  if (a.cur === "r8") a.fireCd = (a.fireMode === "fan") ? (w.cycleFan || 0.30) : (w.cyclePrimary || 0.25);
   a.lastShot = performance.now();
   const I = INACC[a.cur]; if (I) { a.firePenalty = Math.min(I.max, (a.firePenalty || 0) + I.fire); }
   if (a.cur === "r8" && a.fireMode === "fan") a.firePenalty = (a.firePenalty || 0) + 30;

@@ -174,7 +174,7 @@ export function updateR8Hammer() {
   if (vm.current && vm.current.userData && vm.current.userData.hammer) { vm.current.userData.hammer.rotation.x = (human.cur === "r8") ? -(human.r8Charge || 0) * 1.25 : 0; }
   for (const a of agents) {
     const w = a.body.weapon; if (!w || !w.userData || !w.userData.hammer) continue;
-    const c = a.isHuman ? (a.r8Charge || 0) : (a.fireCd > 0 ? 1 - Math.min(1, a.fireCd / 0.4) : 0.9);
+    const c = a.isHuman ? (a.r8Charge || 0) : (a.fireCd > 0 ? 1 - Math.min(1, a.fireCd / 0.25) : 0.9);
     w.userData.hammer.rotation.x = -c * 1.25;
   }
 }
@@ -182,7 +182,9 @@ export function updateR8Hammer() {
 /* ---- sound (tiny WebAudio) ---- */
 let actx = null;
 export function audio() { if (!actx) { try { actx = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) {} } return actx; }
-export function playBeep(freq, dur, type = "square", vol = 0.05) { const c = audio(); if (!c) return; const o = c.createOscillator(), g = c.createGain(); o.type = type; o.frequency.value = freq; g.gain.value = vol; o.connect(g); g.connect(c.destination); o.start(); g.gain.exponentialRampToValueAtTime(0.0001, c.currentTime + dur); o.stop(c.currentTime + dur); }
+let beepMute = false;
+export function setBeepMute(on) { beepMute = on; }   // silence beeps during fast-forward extra steps
+export function playBeep(freq, dur, type = "square", vol = 0.05) { if (beepMute) return; const c = audio(); if (!c) return; const o = c.createOscillator(), g = c.createGain(); o.type = type; o.frequency.value = freq; g.gain.value = vol; o.connect(g); g.connect(c.destination); o.start(); g.gain.exponentialRampToValueAtTime(0.0001, c.currentTime + dur); o.stop(c.currentTime + dur); }
 export function playHitmarker(headshot) {
   const c = audio(); if (!c) return;
   const tick = (f, t0, dur, vol) => { const o = c.createOscillator(), g = c.createGain(); o.type = "square"; o.frequency.value = f; g.gain.setValueAtTime(vol, c.currentTime + t0); g.gain.exponentialRampToValueAtTime(0.0001, c.currentTime + t0 + dur); o.connect(g); g.connect(c.destination); o.start(c.currentTime + t0); o.stop(c.currentTime + t0 + dur); };

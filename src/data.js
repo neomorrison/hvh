@@ -23,7 +23,7 @@ export const WEAPONS = {
   // R8 Revolver — CS2 primary is a slow, deliberate hammer-cock shot; the fan
   // (alt-fire) is faster but inaccurate.  cockTime/cycle govern the real time
   // between shots so it can no longer be spammed faster than CS2.
-  r8:     { name: "R8 Revolver",   slot: 1, side: "both",cost: 600,  dmg: 86, penPct: 93.2, rpm: 120, mag: 8,  reserve: 16, reload: 2.25, run: 220, range: 0.98, kill: 300, auto: false, mode: "r8", cockTime: 0.40, cyclePrimary: 0.40, cycleFan: 0.30 },
+  r8:     { name: "R8 Revolver",   slot: 1, side: "both",cost: 600,  dmg: 86, penPct: 93.2, rpm: 120, mag: 8,  reserve: 16, reload: 2.25, run: 220, range: 0.98, kill: 300, auto: false, mode: "r8", cockTime: 0.25, cyclePrimary: 0.25, cycleFan: 0.30 },
   ssg:    { name: "SSG08",         slot: 2, side: "both",cost: 1700, dmg: 88, penPct: 85,   rpm: 48,  mag: 10, reserve: 20, reload: 3.7,  run: 230, range: 0.99, kill: 300, auto: false, scope: 1, scopedRun: 230 },
   scar:   { name: "SCAR-20",       slot: 2, side: "CT",  cost: 5000, dmg: 80, penPct: 82.5, rpm: 240, mag: 20, reserve: 40, reload: 3.1,  run: 215, range: 0.99, kill: 300, auto: true,  scope: 1, scopedRun: 120 },
   g3:     { name: "G3SG1",         slot: 2, side: "T",   cost: 5000, dmg: 80, penPct: 82.5, rpm: 240, mag: 20, reserve: 40, reload: 4.7,  run: 215, range: 0.99, kill: 300, auto: true,  scope: 1, scopedRun: 120 },
