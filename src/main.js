@@ -24,6 +24,7 @@ import { buildDefaultMap } from './map.js';
 import { loadSourceMap } from './sourcemap_load.js';
 import { meshBackend } from './sourcemap.js';
 import { setListener, sfxScope, unlockAudio, sfxRevolverCock } from './sfx.js';
+import { toggleEditor, isEditorOpen, editorUpdate, editorMouse, editorClick, editorWheel, editorKey, loadPatches } from './editor.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
 const $ = s => document.querySelector(s);
@@ -57,6 +58,8 @@ function updateSpecBanner() {
 
 /* ============================== input ============================== */
 addEventListener('keydown', e => {
+  if (e.code === "Backquote") { toggleEditor(); e.preventDefault(); return; }     // ~ opens/closes the map patch editor
+  if (isEditorOpen()) { keys[e.code] = true; editorKey(e.code); e.preventDefault(); return; }   // editor swallows input
   if (e.code === "KeyI" && GAME.phase !== "editor") { toggleCheatMenu(); e.preventDefault(); return; }
   if (GAME.phase === "warmup" || GAME.phase === "editor") return;
   const human = refs.human;
@@ -97,11 +100,14 @@ renderer.domElement.addEventListener('mousedown', e => { if (e.button === 0) { i
 addEventListener('mouseup', e => { if (e.button === 0) input.mouseDown = false; if (e.button === 2) input.rmbDown = false; });
 addEventListener('contextmenu', e => e.preventDefault());
 addEventListener('mousemove', e => {
-  if (document.pointerLockElement !== renderer.domElement || !refs.human) return;
+  if (document.pointerLockElement !== renderer.domElement) return;
+  if (isEditorOpen()) { editorMouse(e.movementX, e.movementY); return; }
+  if (!refs.human) return;
   const sens = 0.0022;
   if (refs.human.alive) { refs.human.yaw -= e.movementX * sens; refs.human.pitch = THREE.MathUtils.clamp(refs.human.pitch - e.movementY * sens, -1.5, 1.5); }
   else if (spec.free) { spec.yaw -= e.movementX * sens; spec.pitch = THREE.MathUtils.clamp(spec.pitch - e.movementY * sens, -1.5, 1.5); }   // spectator free-cam look
 });
+renderer.domElement.addEventListener('wheel', e => { if (isEditorOpen()) { editorWheel(e.deltaY); e.preventDefault(); } }, { passive: false });
 function onRMB() {
   const human = refs.human; if (!human.alive) return;
   const w = WEAPONS[human.cur];
@@ -111,6 +117,7 @@ function onRMB() {
 }
 renderer.domElement.addEventListener('click', () => {
   unlockAudio();   // a user gesture lets the WebAudio context start
+  if (isEditorOpen()) { editorClick(); renderer.domElement.requestPointerLock(); return; }
   if (GAME.phase === "warmup" || GAME.phase === "editor" || anyPanelOpen()) return;
   if (refs.human && !refs.human.alive && !spec.free) cycleSpec(1);   // spectating locked: click switches player
   renderer.domElement.requestPointerLock();
@@ -227,6 +234,7 @@ function loop(now) {
   requestAnimationFrame(loop);
   let dt = Math.min(0.05, (now - last) / 1000); last = now; clock.t += dt;
   if (GAME.phase !== "warmup" && GAME.phase !== "editor") step(dt);
+  else if (isEditorOpen()) editorUpdate();
   render();
 }
 export function step(dt) {
@@ -341,6 +349,7 @@ function deploySource(glb, spawns, texturedScene) {
   $("#startPanel").classList.remove("show");
   GAME.customMap = null; GAME.sourceMap = spawns.name || "imported"; GAME.phase = "idle";
   const info = loadSourceMap(glb, spawns, texturedScene);
+  loadPatches(GAME.sourceMap, texturedScene);   // re-apply saved map patches (collision + hidden surfaces)
   GAME.round = 1; GAME.half = 1; GAME.scoreCT = 0; GAME.scoreT = 0; GAME.lossStreak = { CT: 0, T: 0 };
   assignHumanTeam();
   buildTeams(); loadConfig(); buildCheatMenu(); startRound();
