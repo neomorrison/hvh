@@ -62,6 +62,7 @@ export const ARMOR = { kevlar: { name: "Kevlar", cost: 650 }, kevhelm: { name: "
 
 // world scale: 1 three.js unit = 1 source unit. eye height ~64, distances in spec units.
 export const EYE_STAND = 64, EYE_CROUCH = 46, PLAYER_RADIUS = 16, GRAVITY = 800, JUMP_VEL = 260;
+export const BHOP_GAIN = 0.05, BHOP_MAX = 1.28;   // per-chained-jump speed gain (+5%), capped at +28% (CS-style bhop)
 
 // bullet penetration (autowall): weapon penPct doubles as penetration power.
 export const PEN = {

@@ -30,9 +30,7 @@ export function buildCheatMenu() {
       rng("Autowall min dmg", 1, 100, () => c.autowall.minDmg, v => c.autowall.minDmg = v),
     ] },
     { title: "🧠 Resolver", rows: [
-      sw("Resolver enabled", () => c.resolver.on, v => c.resolver.on = v),
-      rng("Resolver accuracy %", 0, 100, () => Math.round(c.resolver.accuracy * 100), v => c.resolver.accuracy = v / 100),
-      sel("Mode", "resMode", ["animation", "velocity", "statistical", "brute"], () => c.resolver.mode, v => c.resolver.mode = v),
+      sw("Resolver enabled", () => c.resolver.on, v => c.resolver.on = v),   // on/off — a desyncing enemy still beats it sometimes
     ] },
     { title: "🌀 Anti-Aim", rows: [
       sw("Anti-aim enabled", () => c.antiaim.on, v => c.antiaim.on = v, "F5"),
@@ -54,6 +52,9 @@ export function buildCheatMenu() {
       sw("Distance", () => c.visuals.distance, v => c.visuals.distance = v),
       sw("Snaplines", () => c.visuals.snaplines, v => c.visuals.snaplines = v),
       sw("Chams (wallhack through walls)", () => c.visuals.chams, v => c.visuals.chams = v, "F8"),
+      col("Chams: visible color", () => c.visuals.chamsVisible, v => c.visuals.chamsVisible = v),
+      col("Chams: occluded color", () => c.visuals.chamsOccluded, v => c.visuals.chamsOccluded = v),
+      sw("Show my desync hitbox (local)", () => c.visuals.desyncBox, v => c.visuals.desyncBox = v),
     ] },
   ];
   body.innerHTML = "";
@@ -82,6 +83,11 @@ function rng(label, min, max, get, set) {
   row.innerHTML = `<label>${label}</label><input type="range" min="${min}" max="${max}" value="${get()}"><span class="cval">${get()}</span>`;
   const r = row.querySelector("input"), v = row.querySelector(".cval");
   r.oninput = () => { set(+r.value); v.textContent = r.value; }; row._sync = () => { r.value = get(); v.textContent = get(); }; return row;
+}
+function col(label, get, set) {
+  const row = document.createElement("div"); row.className = "crow";
+  row.innerHTML = `<label>${label}</label><input type="color" value="${get()}">`;
+  const i = row.querySelector("input"); i.oninput = () => set(i.value); row._sync = () => i.value = get(); return row;
 }
 function sel(label, id, opts, get, set) {
   const row = document.createElement("div"); row.className = "crow";

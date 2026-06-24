@@ -8,10 +8,10 @@ import { sfxImpact } from './sfx.js';
 
 export const tracers = [], impacts = [], smokes = [], fires = [], flashes = [], nadeProjectiles = [];
 
-export function addTracer(from, to, color = 0xfff2a0) {
+export function addTracer(from, to, color = 0xfff2a0, life = 0.2) {
   const g = new THREE.BufferGeometry().setFromPoints([from, to]);
   const l = new THREE.Line(g, new THREE.LineBasicMaterial({ color, transparent: true, opacity: .9 }));
-  scene.add(l); tracers.push({ l, t: 0, life: 0.2 });
+  scene.add(l); tracers.push({ l, t: 0, life });
 }
 export function addImpact(p, glass) {
   const m = new THREE.Mesh(new THREE.SphereGeometry(2.4, 6, 6), new THREE.MeshBasicMaterial({ color: 0xffd070 }));

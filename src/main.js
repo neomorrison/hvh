@@ -3,7 +3,7 @@
    debug/test surface.  This module imports everything and ties it together. */
 import * as THREE from 'three';
 import { scene, camera, renderer } from './core.js';
-import { WEAPONS, TEAM, INACC, LAND_RECOVER, JUMP_VEL, ECON, computeDamage } from './data.js';
+import { WEAPONS, TEAM, INACC, LAND_RECOVER, JUMP_VEL, BHOP_GAIN, BHOP_MAX, ECON, computeDamage } from './data.js';
 import { agents, refs, GAME, vm, clock, keys, input } from './state.js';
 import { WALLS, NODES, EDGES, segAABB, losClear, penetrate } from './world.js';
 import { updateEffects, nadeProjectiles } from './effects.js';
@@ -130,7 +130,12 @@ function humanMove(dt) {
   const fwd = new THREE.Vector3(-Math.sin(human.yaw), 0, -Math.cos(human.yaw));
   const right = new THREE.Vector3(Math.cos(human.yaw), 0, -Math.sin(human.yaw));
   const dir = fwd.multiplyScalar(f).add(right.multiplyScalar(s));
-  if (keys["Space"] && human.onGround) human.vel.y = JUMP_VEL;
+  if (keys["Space"] && human.onGround) {
+    human.vel.y = JUMP_VEL;
+    // bhop: a jump issued the same frame you land chains the speed boost; a jump from a standstill starts at 1x
+    human.bhopBoost = human._landedThisFrame ? Math.min(BHOP_MAX, (human.bhopBoost || 1) + BHOP_GAIN) : Math.max(1, human.bhopBoost || 1);
+  }
+  if (human.onGround && !keys["Space"]) human.bhopBoost = 1;   // grounded without immediately re-jumping → lose the chain
   human.realYaw = human.yaw;
   human.speedScale = 1;
   const c = human.cheats;
@@ -245,7 +250,7 @@ function ffShouldRun() { const h = refs.human; return GAME.phase === "live" && h
 function updateFFBanner() {
   if (!ff.banner) {
     ff.banner = document.createElement('div'); ff.banner.id = 'ffBanner';
-    ff.banner.style.cssText = 'position:fixed;left:0;right:0;top:64px;text-align:center;font:bold 15px "Trebuchet MS",sans-serif;color:#ffd86b;text-shadow:0 2px 6px #000;letter-spacing:.4px;pointer-events:none;z-index:50;';
+    ff.banner.style.cssText = 'position:fixed;left:0;right:0;bottom:128px;text-align:center;font:bold 15px "Trebuchet MS",sans-serif;color:#ffd86b;text-shadow:0 2px 6px #000;letter-spacing:.4px;pointer-events:none;z-index:50;';
     ff.banner.textContent = '⏩ FAST-FORWARD 2.5× — simulating the round (all players dead)';
     document.body.appendChild(ff.banner);
   }

@@ -6,6 +6,7 @@ import * as THREE from 'three';
 import { scene, camera } from './core.js';
 import { TEAM, WEAPONS, ECON, EYE_STAND } from './data.js';
 import { agents, refs, vm, clock, GAME } from './state.js';
+import { losClear } from './world.js';
 
 export function makeBody(team, isHuman) {
   const g = new THREE.Group();
@@ -109,10 +110,10 @@ export function defaultCheats(aggressive) {
     aimbot: { on: aggressive, fov: aggressive ? 180 : 30, hitchance: aggressive ? 78 : 50, minDmg: 1, silent: true,
       autoShoot: aggressive, autoScope: true, autoStop: aggressive, autoKnife: aggressive, autoRevolver: true, target: "crosshair", priority: "head", forceBody: false, safepoint: false },
     autowall: { on: aggressive, minDmg: 30 },
-    resolver: { on: aggressive, accuracy: aggressive ? 0.8 : 0.0, mode: "animation" },
+    resolver: { on: aggressive, accuracy: 0.7, mode: "animation" },   // accuracy = internal resolve PROBABILITY (no UI slider; bots overridden by persona.res)
     antiaim: { on: aggressive, yaw: "jitter", jitter: 55, pitch: "down", desync: true, desyncAngle: 58, mode: "at_target", fakeduck: false },
     tickbase: { backtrack: aggressive ? 200 : 0 },
-    visuals: { esp: false, boxes: true, health: true, name: true, distance: false, snaplines: false, chams: false },
+    visuals: { esp: false, boxes: true, health: true, name: true, distance: false, snaplines: false, chams: false, desyncBox: false, chamsVisible: '#ff2a44', chamsOccluded: '#7a4cff' },
   };
 }
 
@@ -200,13 +201,23 @@ export function recolorAgent(a) {
 /* ---- per-frame visual: anti-aim twist, crouch, held weapon, chams ---- */
 export function updateAgentVisual(a) {
   const human = refs.human;
+  const aa = a.cheats.antiaim;
+  // anti-aim DESYNC offset (the "fake" side an un-resolved shooter aims at). Computed for EVERY agent —
+  // including the local player in first person — so the resolver works against the human's own anti-aim.
+  if (aa && aa.on && aa.desync && a.alive) {
+    const ang = (aa.desyncAngle || 45) * Math.PI / 180, side = a.desyncSide || 1, mag = (16 + 14 * Math.sin(ang)) * side;
+    (a._desyncOff || (a._desyncOff = new THREE.Vector3())).set(Math.cos(a.yaw) * mag, 0, -Math.sin(a.yaw) * mag);
+  } else a._desyncOff = null;
   if (a.isHuman && !GAME.thirdPerson) { a.body.g.visible = false; return; }
   if (!a.alive) { a.body.g.visible = false; return; }
   a.body.g.visible = true;
-  if (human && !a.isHuman && a.team !== human.team) applyChams(a, !!(human.cheats.visuals && human.cheats.visuals.chams));
+  if (human && !a.isHuman && a.team !== human.team) {     // chams: colour by line-of-sight (visible vs occluded)
+    const vz = human.cheats.visuals || {};
+    if (vz.chams) applyChams(a, true, chamsVisible(human, a), vz.chamsVisible || '#ff2a44', vz.chamsOccluded || '#7a4cff');
+    else applyChams(a, false);
+  }
   a.body.g.position.set(a.pos.x, a.pos.y, a.pos.z);
   a.body.legs.rotation.y = a.realYaw || a.yaw;
-  const aa = a.cheats.antiaim;
   let upperYaw = a.yaw;
   if (aa.on) {
     if (aa.yaw === "back") upperYaw = a.yaw + Math.PI;
@@ -225,7 +236,11 @@ export function updateAgentVisual(a) {
   }
   a.body.holder.rotation.x = -a.pitch;
 }
-export function applyChams(a, on) {
-  if (a._chams === on) return; a._chams = on;
-  a.body.g.traverse(o => { if (o.isMesh) { o.material.depthTest = !on; o.renderOrder = on ? 990 : 0; if (o.material.emissive) { o.material.emissive.setHex(on ? 0xff2a44 : 0x000000); o.material.emissiveIntensity = on ? 0.6 : 1; } } });
+function chamsVisible(human, a) { const e = eyePos(human); return losClear(e, hitboxCenter(a, 'chest')) || losClear(e, hitboxCenter(a, 'head')); }
+export function applyChams(a, on, visible, visCol, occCol) {
+  const col = on ? (visible ? (visCol || '#ff2a44') : (occCol || '#7a4cff')) : null;
+  const key = on ? (visible ? 'v' : 'o') + col : 'off';
+  if (a._chamsKey === key) return; a._chamsKey = key;                    // composite key so per-frame colour/LOS changes re-apply
+  const hex = col ? parseInt(col.replace('#', ''), 16) : 0;
+  a.body.g.traverse(o => { if (o.isMesh) { o.material.depthTest = !on; o.renderOrder = on ? 990 : 0; if (o.material.emissive) { o.material.emissive.setHex(on ? hex : 0x000000); o.material.emissiveIntensity = on ? 0.6 : 1; } } });
 }
