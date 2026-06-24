@@ -181,20 +181,21 @@ function humanShoot(dt) {
       return;
     }
     if (c8.aimbot.on && c8.aimbot.autoRevolver) {
-      // CONSTANT auto-cock: the hammer cycles every ~0.2s and never holds — the cock sound plays
-      // EVERY cycle. On each completed cock it fires ONLY if the target is firable right then
-      // (aimbotFire re-checks canShoot), and the 0.2s cock cadence — not the R8's normal cooldown —
-      // is the fire-rate limit, so it shoots faster than a manual cock.
-      const AUTO_COCK = 0.2;
+      // CONSTANT auto-cock: the hammer cycles every 0.199s and never holds — the cock sound plays
+      // EVERY completed cycle whether or not anything is in front of you. On each completed cock it
+      // fires ONLY if a target is firable AT THAT INSTANT (aimbotFire re-checks canShoot, so a shot
+      // lands only if the target is still firable after the cock time it took to get here). The
+      // 0.199s cadence — not the R8's normal cooldown — paces the fire, so it beats a manual cock.
+      const AUTO_COCK = 0.199;
       human.r8Charge = (human.r8Charge || 0) + dt / AUTO_COCK;
-      if (human.r8Charge >= 1) {
+      while (human.r8Charge >= 1) {                            // while (not if): a frame hitch never skips a cock
         human.r8Charge -= 1;                                   // immediately re-cock for the next cycle
-        sfxRevolverCock();                                     // cock sound every cycle
-        if (wp8.ammo <= 0) { startReload(human); return; }
+        sfxRevolverCock();                                     // revolver_prepare on every hammer-back
+        if (wp8.ammo <= 0) { startReload(human); human.r8Charge = 0; break; }
         human.fireMode = "primary";
-        if (aimbotFire(human)) human.fireCd = 0;               // fired (target was firable) → cock cadence paces it
-        updateHUDWeapons();
+        if (aimbotFire(human)) human.fireCd = 0;               // target firable now → fire; cadence paces it
       }
+      updateHUDWeapons();
       return;
     }
     if (c8.aimbot.on) {
