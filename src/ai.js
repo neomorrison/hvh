@@ -141,7 +141,8 @@ export function botThink(a, dt) {
     const toMe = a.pos.clone().sub(e.pos).setY(0);
     if (toMe.lengthSq() > 1 && ef.dot(toMe.normalize()) > 0.9) score += 0.5;
     if (!vis) score -= 0.5;
-    for (const m of agents) { if (m !== a && m.team === a.team && m.alive && m.aiTarget === e) { score += 0.3; break; } }
+    let foc = 0; for (const m of agents) { if (m !== a && m.team === a.team && m.alive && m.aiTarget === e) foc++; }
+    if (foc > 0 && foc < 2) score += 0.3;   // mild focus-fire (pair up), but don't let the WHOLE team dogpile one enemy into a cluster
     if (score > bestScore) { bestScore = score; target = e; }
   }
 

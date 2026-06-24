@@ -36,6 +36,23 @@ export function computeBloom(a) {
 }
 
 /* shared movement + physics for player and bots */
+// body-vs-body solidity: moveAgent has no agent-vs-agent collision, so without this bots stack into a
+// single point and freeze (the pile). Push each bot out of every agent it overlaps, every frame.
+function depenetrateAgents(a) {
+  if (a.isHuman) return false;             // don't shove the player's own camera around; bots push off the player instead
+  const R = PLAYER_RADIUS * 2; let px = 0, pz = 0;
+  for (const m of agents) {
+    if (m === a || !m.alive) continue;
+    const dx = a.pos.x - m.pos.x, dz = a.pos.z - m.pos.z, d2 = dx * dx + dz * dz;
+    if (d2 >= R * R) continue;
+    const share = m.isHuman ? 1 : 0.5;     // the player is immovable here → the bot takes the whole push
+    if (d2 < 1) { const j = a._sepSeed != null ? a._sepSeed : (a._sepSeed = Math.random() * 6.283); px += Math.cos(j) * R * share; pz += Math.sin(j) * R * share; continue; }   // perfectly stacked → fixed jitter so the pile explodes apart
+    const d = Math.sqrt(d2), pen = (R - d) * share;
+    px += (dx / d) * pen; pz += (dz / d) * pen;
+  }
+  if (px === 0 && pz === 0) return false;
+  a.pos.x += px; a.pos.z += pz; return true;
+}
 export function moveAgent(a, dirXZ, dt, combat) {
   const w = WEAPONS[a.cur] || { run: 240 };
   let speed = (a.scoped && w.scopedRun) ? w.scopedRun : (w.run || 240);
@@ -99,6 +116,11 @@ export function moveAgent(a, dirXZ, dt, combat) {
       if (!wasOnGround) { const impact = Math.min(1, Math.abs(descend) / JUMP_VEL); a.landBloom = Math.max(a.landBloom || 0, LAND_INACC * (0.45 + impact * 0.9)); }
       a.vel.y = 0; a.onGround = true;
     } else a.onGround = false;
+    if (depenetrateAgents(a)) {   // body-vs-body push, then keep it out of walls
+      [a.pos.x, a.pos.z] = meshBackend.pushOut(a.pos.x, a.pos.z, slideFeet, PLAYER_RADIUS, crouch);
+      a.pos.x = Math.min(Math.max(a.pos.x, MAP_BOUNDS.minX + PLAYER_RADIUS), MAP_BOUNDS.maxX - PLAYER_RADIUS);
+      a.pos.z = Math.min(Math.max(a.pos.z, MAP_BOUNDS.minZ + PLAYER_RADIUS), MAP_BOUNDS.maxZ - PLAYER_RADIUS);
+    }
     a.eye = (a.crouch ? EYE_CROUCH : EYE_STAND) + a.pos.y;
     return;
   }
@@ -111,7 +133,8 @@ export function moveAgent(a, dirXZ, dt, combat) {
     a.vel.y = 0; a.onGround = true;
   } else a.onGround = false;
   a.eye = (a.crouch ? EYE_CROUCH : EYE_STAND) + a.pos.y;
-  collideMove(a.pos, PLAYER_RADIUS, a.pos.y, a.crouch ? 46 : 72);
+  depenetrateAgents(a);                                       // body-vs-body push
+  collideMove(a.pos, PLAYER_RADIUS, a.pos.y, a.crouch ? 46 : 72);   // then re-resolve walls
 }
 
 /* Hit chance = pure accuracy from the live bloom cone vs the target hitbox's
