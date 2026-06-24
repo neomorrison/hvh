@@ -2,11 +2,14 @@
    Real sound effects (lazy-loaded OGG, WebAudio). Each sound is fetched + decoded on first
    use and cached. Positional sounds attenuate with distance and pan relative to the local
    listener (the player, the spectated player, or the free-cam). */
+import * as THREE from 'three';
 import { WEAPONS } from './data.js';
+import { losClear } from './world.js';
 
 let actx = null, master = null, enabled = true, localAgent = null;
 const buf = new Map(), loading = new Map();
-const listener = { x: 0, z: 0, yaw: 0 };
+const listener = { x: 0, y: 50, z: 0, yaw: 0 };
+const _la = new THREE.Vector3(), _lb = new THREE.Vector3();   // reused for the LOS muffle check
 
 function ctx() {
   if (!actx) {
@@ -40,14 +43,19 @@ export function play(name, vol = 1, rate = 1, pan = 0) {
   const b = buf.get(name);
   if (b) emit(b, vol, rate, pan); else load(name).then(bb => emit(bb, vol, rate, pan));
 }
-export function setListener(x, z, yaw, local) { listener.x = x; listener.z = z; listener.yaw = yaw; localAgent = local || null; }
+export function setListener(x, y, z, yaw, local) { listener.x = x; listener.y = y; listener.z = z; listener.yaw = yaw; localAgent = local || null; }
 export function setEnabled(on) { enabled = on; }
 export function unlockAudio() { ctx(); }   // call from a user gesture so the context can start
 
-// distance attenuation + stereo pan toward the listener's right
+// distance attenuation + stereo pan toward the listener's right, MUFFLED when a wall blocks the
+// line of sight to the source (so you can't hear a gunshot clearly through the map).
 function spatial(pos, baseVol, maxDist) {
   const dx = pos.x - listener.x, dz = pos.z - listener.z, d = Math.hypot(dx, dz);
-  const vol = baseVol * Math.pow(Math.max(0, 1 - d / maxDist), 1.5);
+  let vol = baseVol * Math.pow(Math.max(0, 1 - d / maxDist), 1.5);
+  if (vol > 0.01 && d > 200) {
+    _la.set(listener.x, listener.y, listener.z); _lb.set(pos.x, pos.y != null ? pos.y : listener.y, pos.z);
+    if (!losClear(_la, _lb)) vol *= 0.4;   // through-wall muffle
+  }
   const rx = Math.cos(listener.yaw), rz = -Math.sin(listener.yaw);
   const pan = d > 1 ? Math.max(-1, Math.min(1, (dx * rx + dz * rz) / d)) * 0.85 : 0;
   return { vol, pan, d };
@@ -66,6 +74,10 @@ const isLocal = a => a === localAgent;
 
 export function sfxFire(a) {
   const key = a.cur, snd = FIRE[key]; if (!snd) return;
+  if (key === 'r8') {                                          // R8: the hammer cocks every shot (fan mode spams it)
+    if (isLocal(a)) play(w('revolver_prepare'), 0.42, r(1.0, 1.08));
+    else { const s2 = spatial(a.pos, 0.5, 3000); play(w('revolver_prepare'), s2.vol, 1, s2.pan); }
+  }
   if (isLocal(a)) { play(w(snd), 0.5, r(0.98, 1.02)); return; }
   const s = spatial(a.pos, 0.7, 5000); if (s.vol < 0.01) return;
   play(w(s.d > 2200 ? (FIRE_FAR[key] || snd) : snd), s.vol, r(0.97, 1.03), s.pan);

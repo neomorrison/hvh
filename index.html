@@ -273,23 +273,6 @@
 </div></div>
 
 <!-- ================= MAP BUILDER ================= -->
-<div class="panel" id="editorPanel"><div class="card" id="editorCard">
-  <div id="edTop">
-    <div id="edTitle">🛠 Map Builder</div>
-    <div id="edTools"></div>
-  </div>
-  <div id="edMain">
-    <canvas id="edCanvas"></canvas>
-    <div id="edSide">
-      <div id="edProps"></div>
-      <div id="edHelp"></div>
-      <div id="edIO"></div>
-      <textarea id="edJson" placeholder="Export / Import map JSON here"></textarea>
-    </div>
-  </div>
-  <div id="edFlash"></div>
-</div></div>
-
 <!-- ================= START SCREEN ================= -->
 <div class="panel show" id="startPanel"><div class="card" id="startCard">
   <h1>cs_office <span class="hvh">HvH</span></h1>
@@ -297,8 +280,8 @@
   <div class="controls">
     <div><b>WASD</b> move</div><div><b>Mouse</b> look</div>
     <div><b>Left click</b> fire</div><div><b>Right click</b> scope / burst / fan</div>
-    <div><b>R</b> reload (auto at empty)</div><div><b>1 / 2 / 3</b> pistol / rifle / knife</div>
-    <div><b>Shift</b> walk</div><div><b>Ctrl or C</b> crouch · <b>Space</b> jump</div>
+    <div><b>R</b> reload (auto at empty)</div><div><b>1 / 2 / 3</b> rifle / pistol / knife</div>
+    <div><b>Shift</b> walk</div><div><b>C</b> crouch · <b>Space</b> jump</div>
     <div><b>B</b> buy menu</div><div><b>E</b> rescue / pick up hostage</div>
     <div><b>4 / G</b> grenade (click=throw)</div><div><b>V</b> third person</div>
     <div class="you"><b>I</b> CHEAT MENU</div><div class="you"><b>F1</b>-<b>F8</b> cheat toggles · <b>Tab</b> scores</div>
@@ -306,16 +289,6 @@
   <div id="loadStat">Loading Three.js…</div>
   <div>
     <button id="playBtn" disabled>Loading…</button>
-    <button id="editBtn">🛠 Map Builder</button>
-  </div>
-  <div id="importRow" style="pointer-events:auto; margin-top:14px; padding-top:12px; border-top:1px solid #2a3340; font-size:12px; color:#9aa4b2;">
-    <div style="margin-bottom:6px;">🗺️ <b>Import a real CS2 map (offline)</b> — decompile the map to <code>.glb</code> with Source2Viewer, then load it here with an optional spawns <code>.json</code>. See <code>tools/IMPORT.md</code>.</div>
-    <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; justify-content:center;">
-      <label>Geometry: <input type="file" id="glbFile" accept=".glb,.gltf"></label>
-      <label>Spawns: <input type="file" id="spawnFile" accept=".json,application/json"></label>
-      <button id="loadMapBtn" class="edbtn act">Load &amp; Play</button>
-    </div>
-    <div id="importErr" style="color:#ff6b6b; margin-top:6px; min-height:14px;"></div>
   </div>
   <div class="legal">Original fan recreation. Map layout, economy &amp; weapon stats reproduce Counter-Strike 2 mechanics; all original geometry, art and code are original — no Valve assets are bundled. Imported maps load from your own files at runtime. For educational/entertainment purposes.</div>
 </div></div>

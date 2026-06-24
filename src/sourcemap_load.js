@@ -4,7 +4,7 @@
    the BVH-backed mesh collision, spawns/hostages/rescue, and an auto floor-following
    nav graph.  Detail textures are procedurally generated — no external art bundled. */
 import * as THREE from 'three';
-import { scene } from './core.js';
+import { scene, sun } from './core.js';
 import { addMapObject, clearWorld, NODES, EDGES, CT_SPAWNS, T_SPAWNS, HOSTAGE_SPAWNS, RESCUE_ZONES, MAP_BOUNDS } from './world.js';
 import { parseGLB, parseGLBMeshes, TriBVH, meshBackend } from './sourcemap.js';
 
@@ -141,29 +141,26 @@ function makeDetailTexture() {
   return tex;
 }
 
-// night sky: dark gradient dome with procedural stars + a pale moon + a soft cool fill. cs_office
-// is a snowy night map; the previous flat dark colour read as "no sky", and the warm dusk dome
-// looked like a void. The key (shadow-casting) light is core.js `sun`.
+// daytime sky: bright blue gradient dome + a warm sun glow + daylight fill. The key (shadow-casting)
+// light is core.js `sun`, boosted here to a bright daylight intensity.
 function setupSky(b) {
-  const horizon = 0x16273f;
-  scene.background = new THREE.Color(horizon);
-  scene.fog = new THREE.Fog(horizon, 2800, 12000);                  // distant buildings fade into night haze; dome stays visible
-  addMapObject(new THREE.HemisphereLight(0x8aa0c8, 0x2a3140, 0.5));  // soft sky fill (brighter ground term so down-facing ceilings aren't black)
-  addMapObject(new THREE.AmbientLight(0x4a5468, 0.4));              // uniform fill — lifts interior ceilings the sun/point lights can't reach (and it's GPU-free vs more point lights)
+  scene.background = new THREE.Color(0x88b6e8);
+  scene.fog = new THREE.Fog(0xcadcef, 4500, 17000);                 // distant haze; the sky dome stays visible
+  addMapObject(new THREE.HemisphereLight(0xdcecff, 0x8a8474, 0.6));  // sky + warm ground bounce (core.js adds another hemi)
+  addMapObject(new THREE.AmbientLight(0xa8bcd0, 0.35));            // uniform fill so interior ceilings aren't black
+  sun.color.setHex(0xfff6e6); sun.intensity = 1.45;                // bright daylight key light
 
-  // night dome (inverted sphere) with procedural stars. Guarded so the headless THREE stub skips it.
+  // day sky dome (inverted sphere): deep blue zenith -> pale horizon. Guarded for the headless stub.
   if (typeof THREE.ShaderMaterial === 'function' && typeof THREE.SphereGeometry === 'function' && typeof THREE.Mesh === 'function') {
     const mat = new THREE.ShaderMaterial({
       side: THREE.BackSide, depthWrite: false, fog: false,
-      uniforms: { top: { value: new THREE.Color(0x070b18) }, mid: { value: new THREE.Color(horizon) }, bot: { value: new THREE.Color(0x05070c) } },
+      uniforms: { top: { value: new THREE.Color(0x3f7fcf) }, mid: { value: new THREE.Color(0xc4dcf2) }, bot: { value: new THREE.Color(0xaebfd0) } },
       vertexShader: 'varying vec3 vP; void main(){ vP = position; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }',
       fragmentShader: [
         'varying vec3 vP; uniform vec3 top; uniform vec3 mid; uniform vec3 bot;',
-        'float hash(vec3 p){ return fract(sin(dot(floor(p), vec3(127.1,311.7,74.7))) * 43758.5453); }',
         'void main(){',
         '  vec3 d = normalize(vP); float h = d.y;',
-        '  vec3 c = h > 0.0 ? mix(mid, top, pow(h, 0.5)) : mix(mid, bot, pow(-h, 0.5));',
-        '  if (h > 0.03) { float s = hash(d * 260.0); float star = smoothstep(0.9975, 1.0, s) * smoothstep(0.03, 0.35, h); c += vec3(0.72,0.8,0.95) * star; }',
+        '  vec3 c = h > 0.0 ? mix(mid, top, pow(h, 0.62)) : mix(mid, bot, pow(-h, 0.5));',
         '  gl_FragColor = vec4(c, 1.0);',
         '}'
       ].join('\n')
@@ -171,14 +168,14 @@ function setupSky(b) {
     const dome = new THREE.Mesh(new THREE.SphereGeometry(8000, 48, 24), mat); dome.frustumCulled = false; dome.renderOrder = -10; addMapObject(dome);
   }
 
-  // pale moon, aligned with the core key-light direction (core.js sun.position).
+  // bright sun glow, aligned with the core key-light direction (core.js sun.position).
   if (typeof THREE.Sprite === 'function' && typeof THREE.CanvasTexture === 'function' && typeof document !== 'undefined') {
     const cv = document.createElement('canvas'); cv.width = cv.height = 128;
     const ctx = cv.getContext('2d'); const g = ctx.createRadialGradient(64, 64, 0, 64, 64, 64);
-    g.addColorStop(0, 'rgba(240,246,255,1)'); g.addColorStop(0.18, 'rgba(220,232,255,0.95)'); g.addColorStop(0.42, 'rgba(150,175,222,0.22)'); g.addColorStop(1, 'rgba(120,150,210,0)');
+    g.addColorStop(0, 'rgba(255,252,236,1)'); g.addColorStop(0.16, 'rgba(255,246,210,0.9)'); g.addColorStop(0.4, 'rgba(255,238,190,0.25)'); g.addColorStop(1, 'rgba(255,235,180,0)');
     ctx.fillStyle = g; ctx.fillRect(0, 0, 128, 128);
     const spr = new THREE.Sprite(new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(cv), transparent: true, depthWrite: false, fog: false, blending: THREE.AdditiveBlending }));
-    spr.position.copy(new THREE.Vector3(-1200, 2200, 800).normalize().multiplyScalar(7000)); spr.scale.setScalar(1400); addMapObject(spr);
+    spr.position.copy(new THREE.Vector3(-1200, 2200, 800).normalize().multiplyScalar(7000)); spr.scale.setScalar(1700); addMapObject(spr);
   }
 }
 

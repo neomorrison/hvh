@@ -112,8 +112,20 @@ export function updateESP() {
   if (espCanvas.width !== innerWidth) { espCanvas.width = innerWidth; espCanvas.height = innerHeight; }
   espCtx.clearRect(0, 0, espCanvas.width, espCanvas.height);
   const human = refs.human; const v = human && human.cheats.visuals;
-  if (!v || !v.esp || !human || !human.alive || GAME.phase === "warmup") return;
   const W = espCanvas.width, H = espCanvas.height;
+  // SPECTATING (human dead): a name tag above every alive player's head, coloured by team
+  if (human && !human.alive && GAME.phase !== "warmup") {
+    espCtx.font = "bold 12px 'Trebuchet MS',sans-serif"; espCtx.textAlign = "center";
+    for (const e of agents) {
+      if (!e.alive) continue;
+      const head = hitboxCenter(e, "head"); head.y += 16;
+      const ph = worldToScreen(head, W, H); if (!ph || ph.behind) continue;
+      espCtx.lineWidth = 3; espCtx.strokeStyle = "rgba(0,0,0,.6)"; espCtx.strokeText(e.name, ph.x, ph.y);
+      espCtx.fillStyle = e.team === TEAM.CT ? "#7fb4ff" : "#ffb46a"; espCtx.fillText(e.name, ph.x, ph.y);
+    }
+    return;
+  }
+  if (!v || !v.esp || !human || !human.alive || GAME.phase === "warmup") return;
   for (const e of agents) {
     if (!e.alive || e.isHuman || e.team === human.team) continue;
     const head = hitboxCenter(e, "head"); head.y += 10; const feet = new THREE.Vector3(e.pos.x, 0, e.pos.z);
@@ -139,7 +151,7 @@ export function updateReloadRing() {
   } else ring.style.display = "none";
 }
 export function anyPanelOpen() {
-  return $("#buyPanel").classList.contains("show") || $("#cheatPanel").classList.contains("show") || $("#startPanel").classList.contains("show") || $("#editorPanel").classList.contains("show");
+  return $("#buyPanel").classList.contains("show") || $("#cheatPanel").classList.contains("show") || $("#startPanel").classList.contains("show");
 }
 export function updateBloomRing() {
   const human = refs.human; const ring = document.getElementById('bloomRing');

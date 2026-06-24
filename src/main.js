@@ -20,8 +20,7 @@ import {
   renderScoreboard, centerMessage, showHint, showHintOnce, formatTime, buildCrosshair, anyPanelOpen, audio,
 } from './hud.js';
 import { toggleCheatMenu, buildCheatMenu, loadConfig, saveConfig, syncCheatUI } from './cheats.js';
-import { buildDefaultMap, buildCustomMap, blankEditorMap } from './map.js';
-import { openEditor, setDeployHandler, isEditorOpen } from './editor.js';
+import { buildDefaultMap } from './map.js';
 import { loadSourceMap } from './sourcemap_load.js';
 import { meshBackend } from './sourcemap.js';
 import { setListener, sfxScope, unlockAudio } from './sfx.js';
@@ -43,6 +42,17 @@ function specUpdate() {
   if (keys["KeyS"]) spec.pos.addScaledVector(fwd, -sp);
   if (keys["KeyA"]) spec.pos.addScaledVector(right, -sp);
   if (keys["KeyD"]) spec.pos.addScaledVector(right, sp);
+}
+let _specBanner = null;
+function updateSpecBanner() {
+  if (!_specBanner) { _specBanner = document.createElement('div'); _specBanner.id = 'specBanner'; _specBanner.style.cssText = 'position:fixed;left:0;right:0;bottom:84px;text-align:center;font:bold 17px "Trebuchet MS",sans-serif;color:#fff;text-shadow:0 2px 6px #000,0 0 2px #000;pointer-events:none;z-index:50;'; document.body.appendChild(_specBanner); }
+  const h = refs.human;
+  if (h && !h.alive && GAME.phase !== "warmup") {
+    if (spec.free) _specBanner.innerHTML = '<span style="opacity:.85">◉ FREE CAMERA</span> &nbsp;·&nbsp; <span style="font-weight:normal;opacity:.7">WASD fly · Space to lock onto a player</span>';
+    else if (spec.target) _specBanner.innerHTML = 'Spectating <span style="color:' + (spec.target.team === TEAM.CT ? '#7fb4ff' : '#ffb46a') + '">' + spec.target.name + '</span>' + (spec.tp ? ' <span style="opacity:.7">(3rd person)</span>' : '') + ' &nbsp;<span style="font-weight:normal;opacity:.6">click=switch · V=3rd person · Space=free cam</span>';
+    else _specBanner.textContent = '';
+    _specBanner.style.display = 'block';
+  } else _specBanner.style.display = 'none';
 }
 
 /* ============================== input ============================== */
@@ -78,7 +88,7 @@ addEventListener('keydown', e => {
   if (e.code === "F7") { c.visuals.esp = !c.visuals.esp; showHint("ESP " + (c.visuals.esp ? "ON" : "OFF")); syncCheatUI(); }
   if (e.code === "F8") { c.visuals.chams = !c.visuals.chams; showHint("Chams " + (c.visuals.chams ? "ON" : "OFF")); syncCheatUI(); }
   // swallow browser shortcuts for game keys — most importantly Ctrl+W (closes the tab)
-  if (["KeyW", "KeyA", "KeyS", "KeyD", "Space", "ControlLeft", "ControlRight", "ShiftLeft", "KeyC", "Tab"].includes(e.code)) e.preventDefault();
+  if (["KeyW", "KeyA", "KeyS", "KeyD", "Space", "ShiftLeft", "KeyC", "Tab"].includes(e.code)) e.preventDefault();
   if (e.ctrlKey) e.preventDefault();
 });
 addEventListener('keyup', e => { keys[e.code] = false; if (e.code === "Tab") $("#sbPanel").classList.remove("show"); });
@@ -109,8 +119,8 @@ renderer.domElement.addEventListener('click', () => {
 /* ============================== human control ============================== */
 function humanMove(dt) {
   const human = refs.human;
-  // crouch responds to Ctrl OR C (Ctrl+W can close the browser tab, so C is a safe duck key)
-  human.crouch = !!(keys["ControlLeft"] || keys["ControlRight"] || keys["KeyC"]);
+  // crouch is C, NOT Ctrl: Ctrl+W (duck + forward) closes the browser tab and a web page can't block it
+  human.crouch = !!keys["KeyC"];
   human.walk = !!keys["ShiftLeft"];
   let f = 0, s = 0; if (keys["KeyW"]) f++; if (keys["KeyS"]) f--; if (keys["KeyA"]) s--; if (keys["KeyD"]) s++;
   const fwd = new THREE.Vector3(-Math.sin(human.yaw), 0, -Math.cos(human.yaw));
@@ -239,7 +249,7 @@ export function step(dt) {
   }
   updateHostages(dt); updateNades(dt); updateAreas(dt); updateEffects(dt);
   for (const a of agents) updateAgentVisual(a);
-  updateESP(); updateReloadRing(); updateBloomRing(); updateScopeOverlay(); updateR8Hammer();
+  updateESP(); updateReloadRing(); updateBloomRing(); updateScopeOverlay(); updateR8Hammer(); updateSpecBanner();
   updateCamera();
   updateTopHUD(); updatePlayerHUD(); updateBotBars(); updateHUDWeapons();
   $("#roundTimer").textContent = formatTime(GAME.phase === "buy" ? GAME.freeze : GAME.timer);
@@ -250,22 +260,24 @@ export function step(dt) {
 function updateCamera() {
   const human = refs.human;
   if (human.alive) {
-    setListener(human.pos.x, human.pos.z, human.yaw, human);
+    setListener(human.pos.x, human.eye, human.pos.z, human.yaw, human);
     const scopedNow = human.scoped && WEAPONS[human.cur] && WEAPONS[human.cur].scope;
     const tp = GAME.thirdPerson;
     const fov = (scopedNow && !tp) ? 40 : 74;
     if (Math.abs(camera.fov - fov) > 0.5) { camera.fov += (fov - camera.fov) * 0.4; camera.updateProjectionMatrix(); }
     if (tp) {
-      // pull the camera in if a wall/prop is between it and the player (no clipping through walls)
-      const dist = 130, ex = human.pos.x, ey = human.eye, ez = human.pos.z;
-      const vx = Math.sin(human.yaw) * dist, vy = 30, vz = Math.cos(human.yaw) * dist;
-      const vl = Math.hypot(vx, vy, vz), ux = vx / vl, uy = vy / vl, uz = vz / vl;
-      let allow = vl;
+      // orbit BEHIND the player along -view so looking up/down keeps them centered (instead of
+      // panning to the floor). Pull in if a wall is between the camera and the player.
+      const dist = 150, ex = human.pos.x, ey = human.eye, ez = human.pos.z;
+      const cp = Math.cos(human.pitch);
+      let ux = Math.sin(human.yaw) * cp, uy = -Math.sin(human.pitch) + 0.18, uz = Math.cos(human.yaw) * cp;
+      const vl = Math.hypot(ux, uy, uz); ux /= vl; uy /= vl; uz /= vl;
+      let allow = dist;
       if (meshBackend.active && meshBackend.bvh) {
-        const h = meshBackend.bvh.raycast(ex, ey, ez, ux, uy, uz, vl); if (h) allow = Math.max(18, h.t - 12);
+        const h = meshBackend.bvh.raycast(ex, ey, ez, ux, uy, uz, dist); if (h) allow = Math.max(18, h.t - 12);
       } else {
         const o = new THREE.Vector3(ex, ey, ez), d = new THREE.Vector3(ux, uy, uz);
-        for (const wl of WALLS) { if (!wl.block) continue; const r = segAABB(o, d, vl, wl); if (r && r.enter > 1 && r.enter < allow) allow = Math.max(18, r.enter - 12); }
+        for (const wl of WALLS) { if (!wl.block) continue; const r = segAABB(o, d, dist, wl); if (r && r.enter > 1 && r.enter < allow) allow = Math.max(18, r.enter - 12); }
       }
       camera.position.set(ex + ux * allow, ey + uy * allow, ez + uz * allow);
       camera.rotation.set(human.pitch, human.yaw, 0, 'YXZ');
@@ -279,17 +291,17 @@ function updateCamera() {
     if (vm.current) vm.current.visible = false;
     if (Math.abs(camera.fov - 74) > 0.5) { camera.fov = 74; camera.updateProjectionMatrix(); }
     if (spec.free) {                                          // free-fly spectator
-      setListener(spec.pos.x, spec.pos.z, spec.yaw, null);
+      setListener(spec.pos.x, spec.pos.y, spec.pos.z, spec.yaw, null);
       camera.position.copy(spec.pos); camera.rotation.set(spec.pitch, spec.yaw, 0, 'YXZ');
     } else {                                                  // locked on a player
       ensureSpec(); const t = spec.target;
       if (t) {
-        setListener(t.pos.x, t.pos.z, t.yaw, t);
+        setListener(t.pos.x, t.eye, t.pos.z, t.yaw, t);
         t.body.g.visible = spec.tp;                           // first-person spectate hides the spectated player's own model (shown only in 3p)
-        if (spec.tp) {                                        // third person of the spectated player (wall-aware pull-in)
-          const ex = t.pos.x, ey = t.eye, ez = t.pos.z;
-          const vx = Math.sin(t.yaw) * 130, vy = 30, vz = Math.cos(t.yaw) * 130, vl = Math.hypot(vx, vy, vz), ux = vx / vl, uy = vy / vl, uz = vz / vl;
-          let allow = vl; if (meshBackend.active && meshBackend.bvh) { const h = meshBackend.bvh.raycast(ex, ey, ez, ux, uy, uz, vl); if (h) allow = Math.max(18, h.t - 12); }
+        if (spec.tp) {                                        // third person of the spectated player (orbit + wall-aware pull-in)
+          const dist = 150, ex = t.pos.x, ey = t.eye, ez = t.pos.z, cp = Math.cos(t.pitch);
+          let ux = Math.sin(t.yaw) * cp, uy = -Math.sin(t.pitch) + 0.18, uz = Math.cos(t.yaw) * cp; const vl = Math.hypot(ux, uy, uz); ux /= vl; uy /= vl; uz /= vl;
+          let allow = dist; if (meshBackend.active && meshBackend.bvh) { const h = meshBackend.bvh.raycast(ex, ey, ez, ux, uy, uz, dist); if (h) allow = Math.max(18, h.t - 12); }
           camera.position.set(ex + ux * allow, ey + uy * allow, ez + uz * allow); camera.rotation.set(t.pitch, t.yaw, 0, 'YXZ');
         } else { camera.position.set(t.pos.x, t.eye, t.pos.z); camera.rotation.set(t.pitch, t.yaw, 0, 'YXZ'); }
       }
@@ -299,13 +311,15 @@ function updateCamera() {
 function render() { renderer.render(scene, camera); }
 
 /* ============================== boot / deploy ============================== */
-function deploy(custom) {
+// the human spawns on a RANDOM team each match; buildTeams keeps both sides 12-strong regardless
+function assignHumanTeam() { const ct = Math.random() < 0.5; GAME.humanTeam = ct ? TEAM.CT : TEAM.T; GAME.ctIsHuman = ct; }
+function deploy() {
   $("#startPanel").classList.remove("show");
-  GAME.customMap = custom || null; GAME.sourceMap = null;
+  GAME.customMap = null; GAME.sourceMap = null;
   GAME.phase = "idle";
-  if (custom) buildCustomMap(custom); else buildDefaultMap();
+  buildDefaultMap();
   GAME.round = 1; GAME.half = 1; GAME.scoreCT = 0; GAME.scoreT = 0; GAME.lossStreak = { CT: 0, T: 0 };
-  GAME.humanTeam = TEAM.CT; GAME.ctIsHuman = true;
+  assignHumanTeam();
   buildTeams();
   loadConfig();
   buildCheatMenu();
@@ -313,27 +327,13 @@ function deploy(custom) {
   renderer.domElement.requestPointerLock();
   audio();
 }
-setDeployHandler(deploy);
 
-/* ---- import a real CS2 map (.glb geometry + spawns.json) for offline play ---- */
-async function loadAndPlaySource() {
-  const errEl = $("#importErr"); if (errEl) errEl.textContent = "";
-  const gf = $("#glbFile").files[0], sf = $("#spawnFile").files[0];
-  if (!gf) { if (errEl) errEl.textContent = "Choose a decompiled .glb map file first."; return; }
-  try {
-    const glb = await gf.arrayBuffer();
-    let spawns = { ctSpawns: [], tSpawns: [] };
-    if (sf) spawns = JSON.parse(await sf.text());
-    spawns.name = spawns.name || gf.name.replace(/\.[^.]+$/, '');
-    deploySource(glb, spawns);
-  } catch (e) { if (errEl) errEl.textContent = "Import failed: " + (e && e.message || e); else throw e; }
-}
 function deploySource(glb, spawns, texturedScene) {
   $("#startPanel").classList.remove("show");
   GAME.customMap = null; GAME.sourceMap = spawns.name || "imported"; GAME.phase = "idle";
   const info = loadSourceMap(glb, spawns, texturedScene);
   GAME.round = 1; GAME.half = 1; GAME.scoreCT = 0; GAME.scoreT = 0; GAME.lossStreak = { CT: 0, T: 0 };
-  GAME.humanTeam = TEAM.CT; GAME.ctIsHuman = true;
+  assignHumanTeam();
   buildTeams(); loadConfig(); buildCheatMenu(); startRound();
   renderer.domElement.requestPointerLock(); audio();
   showHint(`Imported ${GAME.sourceMap}: ${info.triangles | 0} tris · ${info.navNodes} nav nodes`);
@@ -371,7 +371,7 @@ async function deployMainMap() {
   } catch (e) {                                          // bundled map unreachable → procedural blockout
     console.warn("cs_office mesh map unavailable, using procedural layout:", e);
     if (ls) ls.textContent = "";
-    deploy(null);
+    deploy();
   }
 }
 
@@ -381,8 +381,6 @@ function boot() {
   const btn = $("#playBtn"); btn.disabled = false; btn.textContent = "DEPLOY";
   btn.onclick = () => deployMainMap();
   preloadMainMap().catch(() => {});                      // warm the download while on the start screen
-  const eb = $("#editBtn"); if (eb) eb.onclick = () => openEditor();
-  const lb = $("#loadMapBtn"); if (lb) lb.onclick = () => loadAndPlaySource();
 }
 
 /* debug/test surface */
@@ -404,7 +402,6 @@ window.HVH = {
     WALLS.length = 0; for (const w of saved) WALLS.push(w);
     return { thinFactor: thin.factor, thinBlocked: thin.blocked, thickFactor: thick.factor, thickBlocked: thick.blocked };
   },
-  testCustomMap() { deploy(blankEditorMap()); return { walls: WALLS.length, nodes: NODES.length }; },
   topdown() { GAME.phase = "frozen"; camera.fov = 60; camera.position.set(1700, 3600, 40); camera.rotation.set(-Math.PI / 2, 0, 0); camera.updateProjectionMatrix(); document.getElementById('hud').style.display = 'none'; return 'topdown set'; },
   checkNav() {
     const blocked = [], seen = new Set();

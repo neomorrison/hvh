@@ -10,21 +10,23 @@ import { aimbotFire, moveAgent, meleeAttack, visibleTo, startReload, giveWeapon,
 import { liveHostages } from './game.js';
 
 export function botBuy(a) {
-  const m = a.money;
-  if (m >= 1000 && a.armor <= 0 && Math.random() < 0.85) { a.armor = 100; a.helmet = true; a.money -= 1000; }
-  else if (m >= 650 && a.armor <= 0 && Math.random() < 0.6) { a.armor = 100; a.money -= 650; }
+  const rifle = a.team === TEAM.CT ? "scar" : "g3", cost = k => WEAPONS[k].cost;
+  // ARMOR: buy kevlar+helmet whenever we'd still have a weapon's worth left — don't sit on cash
+  if (a.armor <= 0) {
+    if (a.money >= cost(rifle) + 1000 || a.money >= 1650) { a.armor = 100; a.helmet = true; a.money -= 1000; }
+    else if (a.money >= 650) { a.armor = 100; a.money -= 650; }
+  }
+  // BEST weapon we can afford — no saving. Rifle first, then autosniper, then a pistol upgrade.
   let buy = null;
-  const bias = a.persona && a.persona.wepBias;
-  const biasKey = bias === "scar" ? (a.team === TEAM.CT ? "scar" : "g3") : bias === "g3" ? (a.team === TEAM.CT ? "scar" : "g3") : bias;
-  if (biasKey && WEAPONS[biasKey] && m >= WEAPONS[biasKey].cost && Math.random() < 0.7) buy = biasKey;
-  else if (m >= 5000 && Math.random() < 0.4) buy = a.team === TEAM.CT ? "scar" : "g3";
-  else if (m >= 1700 && Math.random() < 0.5) buy = "ssg";
-  else if (m >= 700 && Math.random() < 0.6) buy = "deagle";
-  else if (m >= 600 && Math.random() < 0.4) buy = "r8";
-  else if (m >= 300 && Math.random() < 0.3) buy = "duals";
-  if (buy && a.money >= WEAPONS[buy].cost) { giveWeapon(a, buy); a.money -= WEAPONS[buy].cost; }
-  if (a.money >= 300 && Math.random() < 0.4) { a.nades.he = 1; a.money -= 300; a.curNade = "he"; }
-  if (a.money >= 200 && Math.random() < 0.3) { a.nades.flash = (a.nades.flash || 0) + 1; a.money -= 200; }
+  if (a.money >= cost(rifle)) buy = (Math.random() < 0.78) ? rifle : "ssg";       // mostly the rifle, sometimes a scout
+  else if (a.money >= cost("ssg") && Math.random() < 0.7) buy = "ssg";
+  else if (a.money >= cost("deagle")) buy = Math.random() < 0.65 ? "deagle" : "r8";
+  else if (a.money >= cost("duals") && Math.random() < 0.7) buy = "duals";
+  if (buy && a.money >= cost(buy)) { giveWeapon(a, buy); a.money -= cost(buy); }
+  // grenades with whatever's left — one of each
+  if (a.money >= 300 && !(a.nades.he > 0)) { a.nades.he = 1; a.money -= 300; a.curNade = a.curNade || "he"; }
+  if (a.money >= 200 && !(a.nades.flash > 0) && Math.random() < 0.6) { a.nades.flash = 1; a.money -= 200; }
+  if (a.money >= 300 && !(a.nades.smoke > 0) && Math.random() < 0.45) { a.nades.smoke = 1; a.money -= 300; }
 }
 
 const SEP_RADIUS = 56;   // ~one node-spacing; tight enough that spawn crowds don't shove each other into walls
