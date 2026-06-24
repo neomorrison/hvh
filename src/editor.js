@@ -1,9 +1,10 @@
 /* ============================== [BRUSH EDITOR] ==============================
-   A lightweight in-game 3D brush editor (Hammer-style) over the deployed map. Make axis-aligned
-   brushes (walls/blocks), push/pull their faces to stretch them exactly into gaps, paint per-face
-   materials, and drop invisible clip brushes as boundaries. Brushes are both VISIBLE geometry and
-   collision; they save to localStorage (per map) and export as JSON to bake in. Hide tool removes
-   glitchy source surfaces. It does not replace cs_office — it patches/extends it.                */
+   A Hammer-style 4-pane map editor over the deployed map. One 3D fly preview pane plus three
+   2D orthographic GRID panes (top / front / side). You build axis-aligned BRUSHES by click-
+   dragging a grid-snapped rectangle in any 2D pane; drag a brush body to move it, drag a face
+   edge to stretch it, paint per-face materials, and drop invisible clip brushes as boundaries.
+   Brushes are visible geometry AND collision. They save to localStorage (per map) and export to
+   JSON to bake in. It patches/extends cs_office — it does not replace it.                       */
 import * as THREE from 'three';
 import { scene, camera, renderer } from './core.js';
 import { GAME, keys } from './state.js';
@@ -11,192 +12,288 @@ import { meshBackend } from './sourcemap.js';
 import { showHint } from './hud.js';
 
 const SKEY = name => 'hvh_patches_' + (name || 'cs_office');
-let GRID = 8;
-const snap = v => Math.round(v / GRID) * GRID;
+const GRIDS = [4, 8, 16, 32, 64];
+const AX = { top: ['x', 'z'], front: ['x', 'y'], side: ['z', 'y'] };   // [horizontal, vertical] world axis per 2D pane
+const IDX = { x: 0, y: 1, z: 2 };
+const third = name => 'xyz'.split('').find(a => !AX[name].includes(a));
 
-/* ---- material palette ---- */
+/* ---- materials (textured persp brushes) ---- */
 const MAT_KEYS = ['concrete', 'brick', 'metal', 'wood', 'white', 'dark', 'nodraw'];
 const MAT_DEF = { concrete: [0x9a9a92, .95, 0], brick: [0x8a4a38, .9, 0], metal: [0x6a6e74, .5, .65], wood: [0x7a5636, .85, 0], white: [0xd8d8d4, .9, 0], dark: [0x2a2d33, .8, .2] };
 const matCache = {};
-function getMat(key) {
-  if (matCache[key]) return matCache[key];
+function getMat(k) {
+  if (matCache[k]) return matCache[k];
   let m;
-  if (key === 'nodraw') m = new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false });
-  else { const [c, r, me] = MAT_DEF[key] || MAT_DEF.concrete; m = new THREE.MeshStandardMaterial({ color: c, roughness: r, metalness: me, side: THREE.DoubleSide }); }
-  return matCache[key] = m;
+  if (k === 'nodraw') m = new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false });
+  else { const [c, r, me] = MAT_DEF[k] || MAT_DEF.concrete; m = new THREE.MeshStandardMaterial({ color: c, roughness: r, metalness: me, side: THREE.DoubleSide }); }
+  return matCache[k] = m;
 }
 
 const ed = {
-  on: false, brushes: [], hides: [], meshMap: new Map(), texturedScene: null,
-  cam: new THREE.Vector3(), yaw: 0, pitch: 0,
-  sel: null, paint: 'concrete', group: null, preview: null, hi: null, _undo: [],
+  on: false, brushes: [], hides: [], texturedScene: null,
+  group: null, overlay: null, edgeGroup: null, grids: {}, selBox: null, preview: null,
+  persp: null, oc: {}, scratch: null, wireDim: null,
+  cam: new THREE.Vector3(-200, 260, 360), yaw: 0, pitch: -0.5,
+  ov: { top: { cu: 0, cv: 0, upp: 4 }, front: { cu: 0, cv: 96, upp: 4 }, side: { cu: 0, cv: 96, upp: 4 } },
+  gi: 2, sel: null, paint: 'concrete', depth: { x: 0, y: 64, z: 0 }, hover: 'persp',
+  drag: null, _undo: [], _vm: [],
 };
 export function isEditorOpen() { return ed.on; }
+const GRID = () => GRIDS[ed.gi];
+const snap = v => Math.round(v / GRID()) * GRID();
 
-/* ---- brush ⇄ mesh + collision ---- */
-function newBrush(cx, cy, cz) {
-  const s = 64;
-  return { min: [snap(cx - s), snap(cy), snap(cz - s)], max: [snap(cx + s), snap(cy + 128), snap(cz + s)], mats: Array(6).fill(ed.paint), type: 'solid' };
-}
-function brushMesh(b) {
-  const w = Math.max(1, b.max[0] - b.min[0]), h = Math.max(1, b.max[1] - b.min[1]), d = Math.max(1, b.max[2] - b.min[2]);
-  const g = new THREE.BoxGeometry(w, h, d);
-  const mats = b.type === 'clip' ? getMat('nodraw') : b.mats.map(getMat);
-  const m = new THREE.Mesh(g, mats);
-  m.position.set((b.min[0] + b.max[0]) / 2, (b.min[1] + b.max[1]) / 2, (b.min[2] + b.max[2]) / 2);
-  m.castShadow = b.type !== 'clip'; m.receiveShadow = true; m.renderOrder = b.type === 'clip' ? 997 : 0;
-  return m;
-}
+/* ---- collision + visible meshes + outline edges, all from the brush list ---- */
 function rebuild() {
-  // collision
   meshBackend.setPatches(ed.brushes.map(b => ({ x: (b.min[0] + b.max[0]) / 2, y: (b.min[1] + b.max[1]) / 2, z: (b.min[2] + b.max[2]) / 2, w: b.max[0] - b.min[0], h: b.max[1] - b.min[1], d: b.max[2] - b.min[2], type: b.type })));
-  // meshes
-  if (!ed.group) { ed.group = new THREE.Group(); scene.add(ed.group); }
-  for (const m of ed.meshMap.values()) { ed.group.remove(m); m.geometry.dispose(); }
-  ed.meshMap.clear();
-  for (const b of ed.brushes) { const m = brushMesh(b); ed.group.add(m); ed.meshMap.set(b, m); }
+  for (const m of ed.group.children.slice()) { ed.group.remove(m); m.geometry.dispose(); }
+  for (const b of ed.brushes) {
+    const w = Math.max(1, b.max[0] - b.min[0]), h = Math.max(1, b.max[1] - b.min[1]), d = Math.max(1, b.max[2] - b.min[2]);
+    const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), b.type === 'clip' ? getMat('nodraw') : b.mats.map(getMat));
+    m.position.set((b.min[0] + b.max[0]) / 2, (b.min[1] + b.max[1]) / 2, (b.min[2] + b.max[2]) / 2);
+    m.castShadow = b.type !== 'clip'; m.receiveShadow = true; m.userData.brush = b;
+    ed.group.add(m);
+  }
+  rebuildEdges();
 }
-function pushUndo() { ed._undo.push(JSON.stringify(ed.brushes)); if (ed._undo.length > 40) ed._undo.shift(); }
+function rebuildEdges() {
+  for (const m of ed.edgeGroup.children.slice()) { ed.edgeGroup.remove(m); m.geometry.dispose(); }
+  for (const b of ed.brushes) {
+    const w = Math.max(1, b.max[0] - b.min[0]), h = Math.max(1, b.max[1] - b.min[1]), d = Math.max(1, b.max[2] - b.min[2]);
+    const e = new THREE.LineSegments(new THREE.EdgesGeometry(new THREE.BoxGeometry(w, h, d)), new THREE.LineBasicMaterial({ color: b === ed.sel ? 0xffd54a : b.type === 'clip' ? 0x4aa0ff : 0x46e06a }));
+    e.position.set((b.min[0] + b.max[0]) / 2, (b.min[1] + b.max[1]) / 2, (b.min[2] + b.max[2]) / 2);
+    ed.edgeGroup.add(e);
+  }
+  if (ed.sel) { const b = ed.sel; ed.selBox.visible = true; ed.selBox.position.set((b.min[0] + b.max[0]) / 2, (b.min[1] + b.max[1]) / 2, (b.min[2] + b.max[2]) / 2); ed.selBox.scale.set(Math.max(1, b.max[0] - b.min[0]), Math.max(1, b.max[1] - b.min[1]), Math.max(1, b.max[2] - b.min[2])); }
+  else ed.selBox.visible = false;
+}
+function pushUndo() { ed._undo.push(JSON.stringify(ed.brushes)); if (ed._undo.length > 50) ed._undo.shift(); }
 
 /* ---- persistence ---- */
 export function loadPatches(mapName, texturedScene) {
   ed.texturedScene = texturedScene || ed.texturedScene;
+  ensure();
   let data = null; try { data = JSON.parse(localStorage.getItem(SKEY(mapName)) || 'null'); } catch (e) {}
-  ed.brushes = (data && data.brushes) || (data && data.patches || []).map(boxToBrush);   // migrate old box patches
+  ed.brushes = (data && data.brushes) || (data && data.patches || []).map(boxToBrush);
   ed.hides = (data && data.hides) || [];
-  rebuild(); if (!ed.on) for (const m of ed.meshMap.values()) m.visible = true;   // brushes always render (they're real geometry)
-  applyHides();
+  rebuild(); applyHides();
 }
 function boxToBrush(p) { return { min: [p.x - p.w / 2, p.y - p.h / 2, p.z - p.d / 2], max: [p.x + p.w / 2, p.y + p.h / 2, p.z + p.d / 2], mats: Array(6).fill('concrete'), type: p.type || 'solid' }; }
-function save() { try { localStorage.setItem(SKEY(GAME.sourceMap), JSON.stringify({ brushes: ed.brushes, hides: ed.hides })); showHint('Saved ' + ed.brushes.length + ' brushes, ' + ed.hides.length + ' hidden'); } catch (e) { showHint('Save failed: ' + e.message); } }
-function exportJSON() {
-  const json = JSON.stringify({ brushes: ed.brushes, hides: ed.hides });
-  console.log('=== MAP PATCHES (' + GAME.sourceMap + ') ===\n' + json);
-  if (navigator.clipboard) navigator.clipboard.writeText(json).then(() => showHint('Brush JSON copied + logged')).catch(() => showHint('Brush JSON logged to console'));
-  else showHint('Brush JSON logged to console');
-}
-function applyHides() { if (!ed.texturedScene) return; const set = new Set(ed.hides); ed.texturedScene.traverse(o => { if (o.isMesh && o.name && set.has(o.name)) o.visible = false; }); }
+function save() { try { localStorage.setItem(SKEY(GAME.sourceMap), JSON.stringify({ brushes: ed.brushes, hides: ed.hides })); showHint('Saved ' + ed.brushes.length + ' brushes'); } catch (e) { showHint('Save failed: ' + e.message); } }
+function exportJSON() { const j = JSON.stringify({ brushes: ed.brushes, hides: ed.hides }); console.log('=== MAP PATCHES (' + GAME.sourceMap + ') ===\n' + j); if (navigator.clipboard) navigator.clipboard.writeText(j).then(() => showHint('Brush JSON copied + logged')).catch(() => showHint('Logged to console')); else showHint('Logged to console'); }
+function applyHides() { if (!ed.texturedScene) return; const s = new Set(ed.hides); ed.texturedScene.traverse(o => { if (o.isMesh && o.name && s.has(o.name)) o.visible = false; }); }
 
-/* ---- aim ray ---- */
-const _ro = new THREE.Vector3(), _rd = new THREE.Vector3(), _rc = new THREE.Raycaster();
-function rayBrush(b) {   // ray vs this brush's AABB → { t, axis, sign } of the entry face, or null
-  let tmin = -1e9, tmax = 1e9, axis = 0, sign = 1;
-  for (let i = 0; i < 3; i++) {
-    const o = i === 0 ? _ro.x : i === 1 ? _ro.y : _ro.z, d = i === 0 ? _rd.x : i === 1 ? _rd.y : _rd.z;
-    if (Math.abs(d) < 1e-8) { if (o < b.min[i] || o > b.max[i]) return null; continue; }
-    let t1 = (b.min[i] - o) / d, t2 = (b.max[i] - o) / d, s = -1; if (t1 > t2) { const t = t1; t1 = t2; t2 = t; s = 1; }
-    if (t1 > tmin) { tmin = t1; axis = i; sign = s; }
-    tmax = Math.min(tmax, t2); if (tmin > tmax) return null;
+/* ---- build the scene objects (grids, overlay, cameras) once ---- */
+const AXISCOL = { x: 0x9a4040, y: 0x408a40, z: 0x4060a0 };
+function makeGrid(uAxis, vAxis) {
+  const span = 8192, minor = 64, pos = [], col = [], c3 = new THREE.Color();
+  const push = (u1, v1, u2, v2, hex) => { c3.setHex(hex); const p1 = [0, 0, 0], p2 = [0, 0, 0]; p1[IDX[uAxis]] = u1; p1[IDX[vAxis]] = v1; p2[IDX[uAxis]] = u2; p2[IDX[vAxis]] = v2; pos.push(...p1, ...p2); col.push(c3.r, c3.g, c3.b, c3.r, c3.g, c3.b); };
+  for (let i = -span; i <= span; i += minor) {
+    push(i, -span, i, span, i === 0 ? AXISCOL[vAxis] : (i % 512 === 0 ? 0x37475c : 0x1d2735));   // verticals (U const)
+    push(-span, i, span, i, i === 0 ? AXISCOL[uAxis] : (i % 512 === 0 ? 0x37475c : 0x1d2735));   // horizontals (V const)
   }
-  return tmin > 0 ? { t: tmin, axis, sign } : null;
+  const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); g.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+  const ls = new THREE.LineSegments(g, new THREE.LineBasicMaterial({ vertexColors: true })); ls.visible = false; ls.frustumCulled = false; return ls;
 }
-function aim() {   // nearest brush face under the crosshair, else the world surface point
-  camera.getWorldPosition(_ro); camera.getWorldDirection(_rd);
-  let bestB = null, bestF = null, bt = 1e9;
-  for (const b of ed.brushes) { const r = rayBrush(b); if (r && r.t < bt) { bt = r.t; bestB = b; bestF = r; } }
-  let wt = 1e9;
-  if (meshBackend.bvh) { const h = meshBackend.bvh.raycast(_ro.x, _ro.y, _ro.z, _rd.x, _rd.y, _rd.z, 6000); if (h) wt = h.t; }
-  const point = _ro.clone().add(_rd.clone().multiplyScalar(Math.min(bt, wt, 6000)));
-  return { brush: bt <= wt ? bestB : null, face: bt <= wt ? bestF : null, point };
+function ensure() {
+  if (ed.group) return;
+  ed.group = new THREE.Group(); scene.add(ed.group);
+  ed.overlay = new THREE.Scene();
+  ed.edgeGroup = new THREE.Group(); ed.overlay.add(ed.edgeGroup);
+  ed.grids = { top: makeGrid('x', 'z'), front: makeGrid('x', 'y'), side: makeGrid('z', 'y') };
+  for (const k in ed.grids) ed.overlay.add(ed.grids[k]);
+  ed.selBox = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), new THREE.MeshBasicMaterial({ color: 0xffd54a, transparent: true, opacity: 0.12, depthTest: false })); ed.selBox.visible = false; ed.overlay.add(ed.selBox);
+  ed.preview = new THREE.LineSegments(new THREE.EdgesGeometry(new THREE.BoxGeometry(1, 1, 1)), new THREE.LineBasicMaterial({ color: 0xffffff })); ed.preview.visible = false; ed.overlay.add(ed.preview);
+  ed.persp = new THREE.PerspectiveCamera(70, 1, 1, 12000);
+  ed.oc = { top: new THREE.OrthographicCamera(), front: new THREE.OrthographicCamera(), side: new THREE.OrthographicCamera() };
+  ed.scratch = new THREE.OrthographicCamera();
+  ed.wireDim = new THREE.MeshBasicMaterial({ color: 0x2f4860, wireframe: true });
+}
+
+/* ---- ortho camera placement + screen↔world ---- */
+function configOrtho(cam, name, cu, cv, w, h) {
+  const upp = ed.ov[name].upp, hu = upp * w / 2, hv = upp * h / 2;
+  cam.left = -hu; cam.right = hu; cam.top = hv; cam.bottom = -hv; cam.near = 1; cam.far = 16000;
+  if (name === 'top') { cam.position.set(cu, 7000, cv); cam.up.set(0, 0, -1); cam.lookAt(cu, 0, cv); }
+  else if (name === 'front') { cam.position.set(cu, cv, 7000); cam.up.set(0, 1, 0); cam.lookAt(cu, cv, 0); }
+  else { cam.position.set(7000, cv, cu); cam.up.set(0, 1, 0); cam.lookAt(0, cv, cu); }
+  cam.updateProjectionMatrix(); cam.updateMatrixWorld();
+}
+function quadRect(name) { const hw = innerWidth / 2, hh = innerHeight / 2; return name === 'persp' ? [0, 0, hw, hh] : name === 'top' ? [hw, 0, hw, hh] : name === 'front' ? [0, hh, hw, hh] : [hw, hh, hw, hh]; }
+function viewAt(mx, my) { const hw = innerWidth / 2, hh = innerHeight / 2; return my < hh ? (mx < hw ? 'persp' : 'top') : (mx < hw ? 'front' : 'side'); }
+function ndc(name, mx, my) { const [qx, qy, qw, qh] = quadRect(name); return [((mx - qx) / qw) * 2 - 1, -(((my - qy) / qh) * 2 - 1)]; }
+// world point under the cursor in a 2D pane → { u, v } on that pane's two axes (unsnapped)
+function worldUV(name, mx, my, cu, cv) {
+  const [qx, qy, qw, qh] = quadRect(name); const cam = ed.scratch; configOrtho(cam, name, cu, cv, qw, qh);
+  const [nx, ny] = ndc(name, mx, my); const p = new THREE.Vector3(nx, ny, 0).unproject(cam);
+  const [ua, va] = AX[name]; return { u: p[ua], v: p[va] };
 }
 
 /* ---- enter / exit ---- */
 export function toggleEditor() { ed.on ? exit() : enter(); }
 function enter() {
   if (!meshBackend.active) { showHint('Deploy cs_office first'); return; }
-  ed.on = true; ed._prevPhase = GAME.phase; GAME.phase = 'editor';
-  if (!ed.group) { ed.group = new THREE.Group(); scene.add(ed.group); }
-  if (!ed.hi) { ed.hi = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), new THREE.MeshBasicMaterial({ color: 0xffd54a, wireframe: true })); ed.hi.renderOrder = 999; scene.add(ed.hi); }
-  if (!ed.preview) { ed.preview = new THREE.Mesh(new THREE.SphereGeometry(4, 8, 8), new THREE.MeshBasicMaterial({ color: 0x44ff88 })); ed.preview.renderOrder = 999; scene.add(ed.preview); }
-  ed.hi.visible = ed.preview.visible = true;
-  ed.cam.copy(camera.position); camera.getWorldDirection(_rd); ed.yaw = Math.atan2(-_rd.x, -_rd.z); ed.pitch = Math.asin(THREE.MathUtils.clamp(_rd.y, -1, 1));
-  rebuild(); document.exitPointerLock(); renderer.domElement.requestPointerLock(); hud(true);
-}
-function exit() { ed.on = false; GAME.phase = ed._prevPhase || 'live'; if (ed.hi) ed.hi.visible = false; if (ed.preview) ed.preview.visible = false; ed.sel = null; hud(false); }
-
-/* ---- per-frame ---- */
-export function editorUpdate() {
-  if (!ed.on) return;
-  const sp = (keys['ShiftLeft'] ? 30 : 12), cp = Math.cos(ed.pitch);
-  const fwd = new THREE.Vector3(-Math.sin(ed.yaw) * cp, Math.sin(ed.pitch), -Math.cos(ed.yaw) * cp);
-  const right = new THREE.Vector3(Math.cos(ed.yaw), 0, -Math.sin(ed.yaw));
-  if (keys['KeyW']) ed.cam.addScaledVector(fwd, sp);
-  if (keys['KeyS']) ed.cam.addScaledVector(fwd, -sp);
-  if (keys['KeyA']) ed.cam.addScaledVector(right, -sp);
-  if (keys['KeyD']) ed.cam.addScaledVector(right, sp);
-  if (keys['KeyR']) ed.cam.y += sp; if (keys['KeyF']) ed.cam.y -= sp;
-  camera.position.copy(ed.cam); camera.rotation.set(ed.pitch, ed.yaw, 0, 'YXZ');
-  const a = aim();
-  if (ed.preview) ed.preview.position.copy(a.point);
-  // highlight: the selected brush (or the one under the crosshair)
-  const b = ed.sel || a.brush;
-  if (b && ed.hi) { ed.hi.visible = true; ed.hi.position.set((b.min[0] + b.max[0]) / 2, (b.min[1] + b.max[1]) / 2, (b.min[2] + b.max[2]) / 2); ed.hi.scale.set(Math.max(2, b.max[0] - b.min[0]) + 2, Math.max(2, b.max[1] - b.min[1]) + 2, Math.max(2, b.max[2] - b.min[2]) + 2); ed.hi.material.color.setHex(ed.sel === b ? 0xffd54a : 0x55ccff); }
-  else if (ed.hi) ed.hi.visible = false;
-  ed._aim = a;
-}
-export function editorMouse(dx, dy) { if (!ed.on) return; const s = 0.0022; ed.yaw -= dx * s; ed.pitch = THREE.MathUtils.clamp(ed.pitch - dy * s, -1.5, 1.5); }
-
-// wheel = push/pull the active face of the selected brush (Shift = move whole brush along that axis)
-export function editorWheel(delta) {
-  if (!ed.on) return;
-  const b = ed.sel, f = ed._aim && ed._aim.face; if (!b || !f) return;
-  pushUndo();
-  const step = (delta < 0 ? 1 : -1) * GRID, ax = f.axis;
-  if (keys['ShiftLeft']) { b.min[ax] += step; b.max[ax] += step; }    // slide whole brush
-  else if (f.sign > 0) b.max[ax] = Math.max(b.min[ax] + GRID, b.max[ax] + step);   // pull the +face
-  else b.min[ax] = Math.min(b.max[ax] - GRID, b.min[ax] - step);                    // pull the −face
+  ensure(); ed.on = true; ed._prevPhase = GAME.phase; GAME.phase = 'editor';
+  ed._vm = camera.children.map(c => [c, c.visible]); for (const [c] of ed._vm) c.visible = false;   // hide the FP viewmodel
+  document.exitPointerLock();
+  const el = renderer.domElement;
+  el.addEventListener('mousedown', onDown); addEventListener('mousemove', onMove); addEventListener('mouseup', onUp); el.addEventListener('wheel', onWheel, { passive: false });
+  el.style.cursor = 'crosshair';
   rebuild(); hud(true);
 }
-export function editorClick() {
-  if (!ed.on) return;
-  const a = ed._aim || aim();
-  ed.sel = a.brush || null;   // select the brush under the crosshair (or deselect)
-  hud(true);
-}
-function move(dx, dy, dz) { const b = ed.sel; if (!b) return; pushUndo(); for (let i = 0; i < 3; i++) { const d = [dx, dy, dz][i]; b.min[i] += d; b.max[i] += d; } rebuild(); }
-function hideSurface() {
-  if (!ed.texturedScene) { showHint('No textured surfaces'); return; }
-  camera.getWorldPosition(_ro); camera.getWorldDirection(_rd); _rc.set(_ro, _rd); _rc.far = 6000;
-  const hits = _rc.intersectObject(ed.texturedScene, true).filter(h => h.object.visible && h.object.name);
-  if (!hits.length) { showHint('No surface under crosshair'); return; }
-  const o = hits[0].object; o.visible = false; if (!ed.hides.includes(o.name)) ed.hides.push(o.name); showHint('Hid ' + o.name);
+function exit() {
+  ed.on = false; GAME.phase = ed._prevPhase || 'live';
+  for (const [c, v] of ed._vm) c.visible = v;
+  const el = renderer.domElement;
+  el.removeEventListener('mousedown', onDown); removeEventListener('mousemove', onMove); removeEventListener('mouseup', onUp); el.removeEventListener('wheel', onWheel);
+  el.style.cursor = ''; ed.drag = null; ed.preview.visible = false; hud(false);
 }
 
+/* ---- per-frame: fly the 3D preview cam (only while hovering it) ---- */
+export function editorUpdate() {
+  if (!ed.on || ed.hover !== 'persp') return;
+  const sp = (keys['ShiftLeft'] ? 34 : 14), cp = Math.cos(ed.pitch);
+  const fwd = new THREE.Vector3(-Math.sin(ed.yaw) * cp, Math.sin(ed.pitch), -Math.cos(ed.yaw) * cp), right = new THREE.Vector3(Math.cos(ed.yaw), 0, -Math.sin(ed.yaw));
+  if (keys['KeyW']) ed.cam.addScaledVector(fwd, sp); if (keys['KeyS']) ed.cam.addScaledVector(fwd, -sp);
+  if (keys['KeyA']) ed.cam.addScaledVector(right, -sp); if (keys['KeyD']) ed.cam.addScaledVector(right, sp);
+  if (keys['KeyR']) ed.cam.y += sp; if (keys['KeyF']) ed.cam.y -= sp;
+}
+
+/* ---- render the 4 panes ---- */
+export function editorRender() {
+  if (!ed.on) return;
+  const hw = innerWidth / 2, hh = innerHeight / 2, prevAuto = renderer.autoClear;
+  renderer.autoClear = false; renderer.setScissorTest(true);
+  // TL: 3D textured preview (GL y is bottom-up, so the top row sits at y = hh)
+  paneSetup(0, hh, hw, hh, 0x141922);
+  ed.persp.aspect = hw / hh; ed.persp.updateProjectionMatrix();
+  ed.persp.position.copy(ed.cam); ed.persp.rotation.set(ed.pitch, ed.yaw, 0, 'YXZ');
+  scene.overrideMaterial = null; ed.group.visible = true; renderer.render(scene, ed.persp);
+  // 2D ortho grid panes
+  orthoPane('top', hw, hh, hw, hh); orthoPane('front', 0, 0, hw, hh); orthoPane('side', hw, 0, hw, hh);
+  renderer.setScissorTest(false); renderer.autoClear = prevAuto;
+  scene.overrideMaterial = null; for (const k in ed.grids) ed.grids[k].visible = false;
+}
+function paneSetup(x, y, w, h, clear) { renderer.setViewport(x, y, w, h); renderer.setScissor(x, y, w, h); renderer.setClearColor(clear, 1); renderer.clear(true, true, true); }
+function orthoPane(name, x, y, w, h) {
+  const v = ed.ov[name], cam = ed.oc[name]; configOrtho(cam, name, v.cu, v.cv, w, h);
+  paneSetup(x, y, w, h, 0x0a0e14);
+  ed.group.visible = false; scene.overrideMaterial = ed.wireDim; renderer.render(scene, cam); scene.overrideMaterial = null; ed.group.visible = true;   // map as dim wireframe
+  for (const k in ed.grids) ed.grids[k].visible = (k === name); renderer.render(ed.overlay, cam);   // grid + bright brush edges on top
+}
+
+/* ============================== mouse ============================== */
+function setHover(mx, my) { ed.hover = viewAt(mx, my); }
+// which face-edge handle (if any) is near (u,v) in this pane → {axis, sign}; else null = body
+function edgeHandle(name, b, u, v) {
+  const [ua, va] = AX[name], m = 7 * ed.ov[name].upp, ui = IDX[ua], vi = IDX[va], out = [];
+  if (Math.abs(u - b.min[ui]) < m) out.push({ axis: ui, sign: -1, d: Math.abs(u - b.min[ui]) });
+  if (Math.abs(u - b.max[ui]) < m) out.push({ axis: ui, sign: 1, d: Math.abs(u - b.max[ui]) });
+  if (Math.abs(v - b.min[vi]) < m) out.push({ axis: vi, sign: -1, d: Math.abs(v - b.min[vi]) });
+  if (Math.abs(v - b.max[vi]) < m) out.push({ axis: vi, sign: 1, d: Math.abs(v - b.max[vi]) });
+  out.sort((a, c) => a.d - c.d); return out[0] || null;
+}
+function brushAt(name, u, v) {   // topmost brush whose footprint contains (u,v) in this pane
+  const [ua, va] = AX[name], ui = IDX[ua], vi = IDX[va];
+  for (let i = ed.brushes.length - 1; i >= 0; i--) { const b = ed.brushes[i]; if (u >= b.min[ui] && u <= b.max[ui] && v >= b.min[vi] && v <= b.max[vi]) return b; }
+  return null;
+}
+function onDown(e) {
+  const name = viewAt(e.clientX, e.clientY); ed.hover = name;
+  if (name === 'persp') {
+    if (e.button === 2) ed.drag = { kind: 'look' };
+    else if (e.button === 0) selectPersp(e.clientX, e.clientY);
+    return;
+  }
+  const v = ed.ov[name];
+  if (e.button === 2 || e.button === 1) { ed.drag = { kind: 'pan', name, sx: e.clientX, sy: e.clientY, cu0: v.cu, cv0: v.cv }; e.preventDefault(); return; }
+  const w = worldUV(name, e.clientX, e.clientY, v.cu, v.cv), hit = brushAt(name, w.u, w.v);
+  if (hit) {
+    ed.sel = hit; const eh = edgeHandle(name, hit, w.u, w.v);
+    pushUndo();
+    ed.drag = eh ? { kind: 'resize', name, b: hit, axis: eh.axis, sign: eh.sign } : { kind: 'move', name, b: hit, min0: hit.min.slice(), max0: hit.max.slice(), u0: snap(w.u), v0: snap(w.v) };
+    rebuildEdges();
+  } else { ed.sel = null; ed.drag = { kind: 'create', name, u0: snap(w.u), v0: snap(w.v), u1: snap(w.u), v1: snap(w.v) }; rebuildEdges(); }
+}
+function onMove(e) {
+  setHover(e.clientX, e.clientY); const d = ed.drag; if (!d) return;
+  if (d.kind === 'look') { ed.yaw -= e.movementX * 0.005; ed.pitch = THREE.MathUtils.clamp(ed.pitch - e.movementY * 0.005, -1.5, 1.5); return; }
+  const v = ed.ov[d.name];
+  if (d.kind === 'pan') { const w0 = worldUV(d.name, d.sx, d.sy, d.cu0, d.cv0), w1 = worldUV(d.name, e.clientX, e.clientY, d.cu0, d.cv0); v.cu = d.cu0 - (w1.u - w0.u); v.cv = d.cv0 - (w1.v - w0.v); return; }
+  const w = worldUV(d.name, e.clientX, e.clientY, v.cu, v.cv), [ua, va] = AX[d.name], ui = IDX[ua], vi = IDX[va];
+  if (d.kind === 'create') { d.u1 = snap(w.u); d.v1 = snap(w.v); showPreview(d); }
+  else if (d.kind === 'move') { const du = snap(w.u) - d.u0, dv = snap(w.v) - d.v0; d.b.min[ui] = d.min0[ui] + du; d.b.max[ui] = d.max0[ui] + du; d.b.min[vi] = d.min0[vi] + dv; d.b.max[vi] = d.max0[vi] + dv; rebuild(); }
+  else if (d.kind === 'resize') { const val = snap(d.axis === ui ? w.u : (d.axis === vi ? w.v : w.u)); if (d.sign < 0) d.b.min[d.axis] = Math.min(val, d.b.max[d.axis] - GRID()); else d.b.max[d.axis] = Math.max(val, d.b.min[d.axis] + GRID()); rebuild(); }
+}
+function onUp(e) {
+  const d = ed.drag; ed.drag = null; ed.preview.visible = false; if (!d) return;
+  if (d.kind === 'create') {
+    const [ua, va] = AX[d.name], ui = IDX[ua], vi = IDX[va], ti = IDX[third(d.name)];
+    const u0 = Math.min(d.u0, d.u1), u1 = Math.max(d.u0, d.u1), v0 = Math.min(d.v0, d.v1), v1 = Math.max(d.v0, d.v1);
+    if (u1 - u0 >= GRID() && v1 - v0 >= GRID()) {
+      pushUndo(); const b = { min: [0, 0, 0], max: [0, 0, 0], mats: Array(6).fill(ed.paint), type: 'solid' };
+      b.min[ui] = u0; b.max[ui] = u1; b.min[vi] = v0; b.max[vi] = v1;
+      b.min[ti] = snap(ed.depth['xyz'[ti]] - 64); b.max[ti] = snap(ed.depth['xyz'[ti]] + 64);   // default depth on the 3rd axis
+      ed.brushes.push(b); ed.sel = b;
+    }
+    rebuild(); hud(true);
+  } else if (d.kind === 'move' || d.kind === 'resize') { ed.depth = { x: (d.b.min[0] + d.b.max[0]) / 2, y: (d.b.min[1] + d.b.max[1]) / 2, z: (d.b.min[2] + d.b.max[2]) / 2 }; hud(true); }
+}
+function onWheel(e) {
+  const name = viewAt(e.clientX, e.clientY); e.preventDefault();
+  if (name === 'persp') { const cp = Math.cos(ed.pitch); ed.cam.addScaledVector(new THREE.Vector3(-Math.sin(ed.yaw) * cp, Math.sin(ed.pitch), -Math.cos(ed.yaw) * cp), e.deltaY < 0 ? 80 : -80); return; }
+  const v = ed.ov[name]; v.upp = THREE.MathUtils.clamp(v.upp * (e.deltaY < 0 ? 1 / 1.15 : 1.15), 0.25, 40);
+}
+function showPreview(d) {
+  const [ua, va] = AX[d.name], ui = IDX[ua], vi = IDX[va], ti = IDX[third(d.name)];
+  const u0 = Math.min(d.u0, d.u1), u1 = Math.max(d.u0, d.u1), v0 = Math.min(d.v0, d.v1), v1 = Math.max(d.v0, d.v1);
+  const sz = [0, 0, 0], ct = [0, 0, 0]; sz[ui] = Math.max(1, u1 - u0); sz[vi] = Math.max(1, v1 - v0); sz[ti] = Math.max(1, snap(ed.depth['xyz'[ti]] + 64) - snap(ed.depth['xyz'[ti]] - 64));
+  ct[ui] = (u0 + u1) / 2; ct[vi] = (v0 + v1) / 2; ct[ti] = ed.depth['xyz'[ti]];
+  ed.preview.geometry.dispose(); ed.preview.geometry = new THREE.EdgesGeometry(new THREE.BoxGeometry(sz[0], sz[1], sz[2]));
+  ed.preview.position.set(ct[0], ct[1], ct[2]); ed.preview.visible = true;
+}
+const _rc = new THREE.Raycaster();
+function selectPersp(mx, my) {
+  const [nx, ny] = ndc('persp', mx, my); _rc.setFromCamera({ x: nx, y: ny }, ed.persp);
+  const hit = _rc.intersectObjects(ed.group.children, false)[0];
+  ed.sel = hit ? hit.object.userData.brush : null; rebuildEdges(); hud(true);
+}
+
+/* ============================== keyboard ============================== */
 export function editorKey(code) {
   if (!ed.on) return false;
-  const f = ed._aim && ed._aim.face, a = ed._aim;
-  if (code === 'KeyB' || code === 'Enter') { pushUndo(); const nb = newBrush(a ? a.point.x : ed.cam.x, a ? a.point.y : ed.cam.y, a ? a.point.z : ed.cam.z); ed.brushes.push(nb); ed.sel = nb; rebuild(); hud(true); return true; }
-  if (ed.sel) {
-    if (code === 'KeyX' || code === 'Delete') { pushUndo(); const i = ed.brushes.indexOf(ed.sel); if (i >= 0) ed.brushes.splice(i, 1); ed.sel = null; rebuild(); hud(true); return true; }
-    if (code === 'KeyC') { pushUndo(); const c = JSON.parse(JSON.stringify(ed.sel)); c.min[1] += 64; c.max[1] += 64; ed.brushes.push(c); ed.sel = c; rebuild(); return true; }
-    if (code === 'KeyT') { pushUndo(); ed.sel.type = ed.sel.type === 'clip' ? 'solid' : 'clip'; rebuild(); hud(true); return true; }
-    if (/^Digit[1-7]$/.test(code) && f) { pushUndo(); ed.sel.mats[f.axis * 2 + (f.sign > 0 ? 0 : 1)] = MAT_KEYS[+code.slice(5) - 1]; rebuild(); hud(true); return true; }
-    if (code === 'KeyY') { pushUndo(); ed.sel.mats = Array(6).fill(ed.paint); rebuild(); hud(true); return true; }   // paint all faces
-    if (code === 'KeyI') { move(0, 0, -GRID); return true; } if (code === 'KeyK') { move(0, 0, GRID); return true; }
-    if (code === 'KeyJ') { move(-GRID, 0, 0); return true; } if (code === 'KeyL') { move(GRID, 0, 0); return true; }
-    if (code === 'KeyU') { move(0, GRID, 0); return true; } if (code === 'KeyO') { move(0, -GRID, 0); return true; }
-  }
-  if (/^Digit[1-7]$/.test(code)) { ed.paint = MAT_KEYS[+code.slice(5) - 1]; hud(true); return true; }   // pick paint material (no face)
   if (code === 'KeyZ') { if (ed._undo.length) { ed.brushes = JSON.parse(ed._undo.pop()); ed.sel = null; rebuild(); hud(true); } return true; }
-  if (code === 'KeyG') { GRID = GRID === 8 ? 16 : GRID === 16 ? 32 : 8; hud(true); return true; }   // cycle grid
-  if (code === 'KeyH') { hideSurface(); return true; }
+  if (code === 'KeyG') { ed.gi = (ed.gi + 1) % GRIDS.length; hud(true); return true; }
   if (code === 'KeyP') { save(); return true; }
   if (code === 'KeyM') { exportJSON(); return true; }
+  if (code === 'KeyH') { hideSurface(); return true; }
+  if (code === 'BracketLeft' || code === 'BracketRight') { const t = third(ed.hover === 'persp' ? 'top' : ed.hover); ed.depth[t] += (code === 'BracketRight' ? GRID() : -GRID()); hud(true); return true; }
+  if (code === 'KeyB') { pushUndo(); const c = ed.depth; const b = { min: [snap(c.x - 32), snap(c.y), snap(c.z - 32)], max: [snap(c.x + 32), snap(c.y + 128), snap(c.z + 32)], mats: Array(6).fill(ed.paint), type: 'solid' }; ed.brushes.push(b); ed.sel = b; rebuild(); hud(true); return true; }
+  if (ed.sel) {
+    const b = ed.sel;
+    if (code === 'KeyX' || code === 'Delete') { pushUndo(); const i = ed.brushes.indexOf(b); if (i >= 0) ed.brushes.splice(i, 1); ed.sel = null; rebuild(); hud(true); return true; }
+    if (code === 'KeyT') { pushUndo(); b.type = b.type === 'clip' ? 'solid' : 'clip'; rebuild(); hud(true); return true; }
+    if (code === 'KeyC') { pushUndo(); const c = JSON.parse(JSON.stringify(b)); c.min[1] += 128; c.max[1] += 128; ed.brushes.push(c); ed.sel = c; rebuild(); return true; }
+    if (code === 'KeyY') { pushUndo(); b.mats = Array(6).fill(ed.paint); rebuild(); hud(true); return true; }
+    if (/^Digit[1-7]$/.test(code)) { pushUndo(); ed.paint = MAT_KEYS[+code.slice(5) - 1]; b.mats = Array(6).fill(ed.paint); rebuild(); hud(true); return true; }
+  } else if (/^Digit[1-7]$/.test(code)) { ed.paint = MAT_KEYS[+code.slice(5) - 1]; hud(true); return true; }
   return true;
+}
+function hideSurface() {
+  if (ed.hover !== 'persp' || !ed.texturedScene) { showHint('Aim the 3D pane at a surface, press H'); return; }
+  _rc.setFromCamera({ x: 0, y: 0 }, ed.persp);
+  const hits = _rc.intersectObject(ed.texturedScene, true).filter(h => h.object.visible && h.object.name);
+  if (!hits.length) { showHint('No surface centered in the 3D pane'); return; }
+  const o = hits[0].object; o.visible = false; if (!ed.hides.includes(o.name)) ed.hides.push(o.name); showHint('Hid ' + o.name);
 }
 
 /* ---- HUD ---- */
 let _hud = null;
 function hud(show) {
-  if (!_hud) { _hud = document.createElement('div'); _hud.id = 'edHud'; _hud.style.cssText = 'position:fixed;top:54px;left:12px;z-index:60;background:rgba(12,16,22,.88);border:1px solid #2a3340;border-radius:8px;padding:10px 14px;font:12px "Trebuchet MS",sans-serif;color:#cfd6e2;line-height:1.65;pointer-events:none;max-width:340px;'; document.body.appendChild(_hud); }
+  if (!_hud) { _hud = document.createElement('div'); _hud.id = 'edHud'; _hud.style.cssText = 'position:fixed;left:50%;top:6px;transform:translateX(-50%);z-index:60;background:rgba(12,16,22,.9);border:1px solid #2a3340;border-radius:7px;padding:6px 13px;font:11.5px "Trebuchet MS",sans-serif;color:#cfd6e2;pointer-events:none;white-space:nowrap;'; document.body.appendChild(_hud); }
   if (!ed.on) { _hud.style.display = 'none'; return; }
   _hud.style.display = 'block';
-  const sw = (k) => '<span style="display:inline-block;width:9px;height:9px;border-radius:2px;vertical-align:middle;background:' + (k === 'nodraw' ? 'transparent;border:1px solid #889' : '#' + (MAT_DEF[k] ? MAT_DEF[k][0].toString(16).padStart(6, '0') : '888')) + '"></span>';
-  _hud.innerHTML = '<b style="color:#ffd54a">🛠 BRUSH EDITOR</b> <span style="opacity:.6">~ exit · grid ' + GRID + 'u</span><br>'
-    + '<span style="opacity:.8">WASD/RF</span> fly · <span style="opacity:.8">mouse</span> look · <span style="opacity:.8">B</span> new brush · <span style="opacity:.8">click</span> select<br>'
-    + '<span style="opacity:.8">wheel</span> push/pull aimed face (Shift=slide) · <span style="opacity:.8">IJKL/UO</span> move<br>'
-    + '<span style="opacity:.8">1-7</span> face material · <span style="opacity:.8">Y</span> paint all · <span style="opacity:.8">T</span> solid/clip · <span style="opacity:.8">C</span> dup · <span style="opacity:.8">X</span> del · <span style="opacity:.8">Z</span> undo<br>'
-    + '<span style="opacity:.8">H</span> hide surface · <span style="opacity:.8">G</span> grid · <span style="opacity:.8">P</span> save · <span style="opacity:.8">M</span> export<br>'
-    + 'Paint: ' + sw(ed.paint) + ' ' + ed.paint + ' &nbsp; Brushes: <b>' + ed.brushes.length + '</b>'
-    + (ed.sel ? ' &nbsp; <span style="color:#ffd54a">selected ' + ed.sel.type + '</span>' : ' &nbsp;<span style="opacity:.5">none selected</span>');
+  const sw = k => '<span style="display:inline-block;width:9px;height:9px;border-radius:2px;vertical-align:middle;background:' + (k === 'nodraw' ? 'transparent;border:1px solid #889' : '#' + (MAT_DEF[k] ? MAT_DEF[k][0].toString(16).padStart(6, '0') : '888')) + '"></span>';
+  _hud.innerHTML = '<b style="color:#ffd54a">🛠 BRUSH EDITOR</b> &nbsp;<span style="opacity:.85">2D pane:</span> drag=new brush · drag body=move · drag edge=stretch · RMB=pan · wheel=zoom &nbsp;|&nbsp; '
+    + '<span style="opacity:.85">3D:</span> WASD/RF fly, RMB look &nbsp;|&nbsp; <b>1-7</b> material · <b>T</b> clip · <b>C</b> dup · <b>X</b> del · <b>Z</b> undo · <b>[ ]</b> depth · <b>G</b> grid ' + GRID() + ' · <b>H</b> hide · <b>P</b> save · <b>M</b> export · <b>~</b> exit'
+    + '<br>paint ' + sw(ed.paint) + ' ' + ed.paint + ' · depth ' + Math.round(ed.depth.x) + ',' + Math.round(ed.depth.y) + ',' + Math.round(ed.depth.z) + ' · brushes <b>' + ed.brushes.length + '</b>' + (ed.sel ? ' · <span style="color:#ffd54a">selected ' + ed.sel.type + '</span>' : '');
 }

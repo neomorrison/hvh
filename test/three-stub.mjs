@@ -6,6 +6,7 @@
 export const PCFSoftShadowMap = 1;
 export const DoubleSide = 2, FrontSide = 0, BackSide = 1;
 export class BufferAttribute { constructor(array, itemSize) { this.array = array; this.itemSize = itemSize; this.count = array ? array.length / itemSize : 0; } }
+export class Float32BufferAttribute extends BufferAttribute {}
 
 export class Vector3 {
   constructor(x = 0, y = 0, z = 0) { this.x = x; this.y = y; this.z = z; }
@@ -46,6 +47,7 @@ export class Vector3 {
     return this;
   }
   project() { /* inert: keep in NDC-ish range so worldToScreen doesn't crash */ this.z = 0.5; return this; }
+  unproject() { return this; }
 }
 
 export class Euler {
@@ -64,12 +66,13 @@ export class Color { constructor(h = 0) { this.h = h; } setHex(h) { this.h = h; 
 class Object3D {
   constructor() {
     this.position = new Vector3(); this.rotation = new Euler(); this.scale = new Vector3(1, 1, 1);
-    this.children = []; this.parent = null; this.visible = true; this.userData = {};
+    this.children = []; this.parent = null; this.visible = true; this.userData = {}; this.up = new Vector3(0, 1, 0);
     this.castShadow = false; this.receiveShadow = false; this.renderOrder = 0;
   }
   add(o) { this.children.push(o); if (o) o.parent = this; return this; }
   remove(o) { const i = this.children.indexOf(o); if (i >= 0) this.children.splice(i, 1); return this; }
   traverse(fn) { fn(this); for (const c of this.children) c.traverse && c.traverse(fn); }
+  lookAt() {} updateMatrixWorld() {} getWorldPosition(v) { return v ? v.copy(this.position) : this.position.clone(); } getWorldDirection(v) { return (v || new Vector3()).set(0, 0, -1); }
 }
 export class Group extends Object3D {}
 export class Scene extends Object3D { constructor() { super(); this.background = null; this.fog = null; } }
@@ -84,9 +87,11 @@ export class BoxGeometry extends Geo { constructor(w, h, d) { super(); this.w = 
 export class SphereGeometry extends Geo {}
 export class CylinderGeometry extends Geo {}
 export class BufferGeometry extends Geo {}
+export class EdgesGeometry extends Geo { constructor(geo) { super(); this.geo = geo; } }
 
 export class Mesh extends Object3D { constructor(geometry, material) { super(); this.geometry = geometry || new Geo(); this.material = material || new Mat(); this.isMesh = true; } }
 export class Line extends Object3D { constructor(geometry, material) { super(); this.geometry = geometry || new Geo(); this.material = material || new Mat(); } }
+export class LineSegments extends Line {}
 
 class Light extends Object3D { constructor(color, intensity) { super(); this.color = new Color(color); this.intensity = intensity ?? 1; this.shadow = { mapSize: { set() {} }, camera: {} }; } }
 export class HemisphereLight extends Light {}
@@ -98,7 +103,11 @@ export class PerspectiveCamera extends Object3D {
   constructor(fov = 60, aspect = 1, near = 1, far = 1000) { super(); this.fov = fov; this.aspect = aspect; this.near = near; this.far = far; }
   updateProjectionMatrix() {}
 }
-export class Raycaster {}
+export class OrthographicCamera extends Object3D {
+  constructor(left = -1, right = 1, top = 1, bottom = -1, near = 1, far = 1000) { super(); this.left = left; this.right = right; this.top = top; this.bottom = bottom; this.near = near; this.far = far; }
+  updateProjectionMatrix() {}
+}
+export class Raycaster { setFromCamera() {} intersectObject() { return []; } intersectObjects() { return []; } }
 export class Fog { constructor(c, n, f) { this.color = c; this.near = n; this.far = f; } }
 
 function makeDomElement() {
@@ -120,6 +129,6 @@ function makeCtx() {
 }
 
 export class WebGLRenderer {
-  constructor() { this.domElement = makeDomElement(); this.shadowMap = { enabled: false, type: 0 }; }
-  setSize() {} setPixelRatio() {} render() {}
+  constructor() { this.domElement = makeDomElement(); this.shadowMap = { enabled: false, type: 0 }; this.autoClear = true; }
+  setSize() {} setPixelRatio() {} render() {} setScissorTest() {} setScissor() {} setViewport() {} setClearColor() {} clear() {}
 }
