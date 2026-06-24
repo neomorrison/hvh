@@ -168,7 +168,7 @@ function humanShoot(dt) {
   // knife
   if (WEAPONS[human.cur] && WEAPONS[human.cur].melee) {
     const c2 = human.cheats;
-    if (c2.aimbot.on && c2.aimbot.autoKnife) { if (human.fireCd <= 0) meleeAttack(human, false); return; }
+    if (c2.aimbot.on && c2.aimbot.autoKnife) { if (human.fireCd <= 0) meleeAttack(human, false, true); return; }   // auto: only swings (and sounds) when an enemy is actually in range
     if (human.fireCd <= 0) { if (md) meleeAttack(human, false); else if (rmb) meleeAttack(human, true); }
     return;
   }

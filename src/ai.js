@@ -127,7 +127,7 @@ export function botThink(a, dt) {
     if (kd > WEAPONS.knife.knifeRange * 0.8) {
       if (visibleTo(a, kt)) botMove(a, kt.pos.clone().sub(a.pos).setY(0).normalize(), dt, true);
       else { if (needRepath(a)) { navTo(a, nearestNode(kt.pos)); a.aiTimer = 1 + Math.random(); } followPath(a, dt, true); }
-    } else { moveAgent(a, new THREE.Vector3(0, 0, 0), dt, true); meleeAttack(a, kd < 38); }
+    } else { moveAgent(a, new THREE.Vector3(0, 0, 0), dt, true); meleeAttack(a, kd < 38, true); }
     return;
   }
   // weighted target selection: nearest, finish low HP, punish enemies aiming at us, focus-fire with team
