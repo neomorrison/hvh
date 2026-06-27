@@ -56,9 +56,30 @@ function updateSpecBanner() {
   } else _specBanner.style.display = 'none';
 }
 
+/* ============================== admin-gated map editor ============================== */
+const ADMIN_PW = "neo8755";   // change this to your own password
+let adminUnlocked = false;
+function adminLogin() {
+  if (document.getElementById("adminLogin")) return;
+  document.exitPointerLock();
+  const ov = document.createElement("div"); ov.id = "adminLogin";
+  ov.style.cssText = "position:fixed;inset:0;z-index:200;background:rgba(0,0,0,.72);display:flex;align-items:center;justify-content:center;";
+  ov.innerHTML = '<div style="background:#161b24;border:1px solid #2a3340;border-radius:10px;padding:22px 26px;text-align:center;font:14px \'Trebuchet MS\',sans-serif;color:#cfd6e2;min-width:240px;">'
+    + '<div style="font-weight:bold;color:#ffd54a;margin-bottom:12px;">🔒 Admin login</div>'
+    + '<input id="admPw" type="password" placeholder="password" autocomplete="off" style="padding:7px 10px;border-radius:6px;border:1px solid #3a4452;background:#0e131b;color:#e6ecf5;outline:none;width:200px;">'
+    + '<div style="margin-top:12px;"><button id="admGo" style="padding:6px 16px;cursor:pointer;">Enter</button> <button id="admX" style="padding:6px 16px;cursor:pointer;">Cancel</button></div>'
+    + '<div id="admErr" style="color:#ff6464;margin-top:8px;height:14px;font-size:12px;"></div></div>';
+  document.body.appendChild(ov);
+  const pw = ov.querySelector("#admPw"), err = ov.querySelector("#admErr"); pw.focus();
+  const close = () => ov.remove();
+  const submit = () => { if (pw.value === ADMIN_PW) { adminUnlocked = true; close(); toggleEditor(); } else { err.textContent = "Wrong password"; pw.value = ""; } };
+  ov.querySelector("#admGo").onclick = submit; ov.querySelector("#admX").onclick = close;
+  pw.addEventListener("keydown", ev => { ev.stopPropagation(); if (ev.code === "Enter") submit(); else if (ev.code === "Escape") close(); });
+}
+
 /* ============================== input ============================== */
 addEventListener('keydown', e => {
-  if (e.code === "Backquote") { toggleEditor(); e.preventDefault(); return; }     // ~ opens/closes the map patch editor
+  if (e.code === "Backquote") { if (adminUnlocked) toggleEditor(); else adminLogin(); e.preventDefault(); return; }     // ~ : map editor, gated behind admin login
   if (isEditorOpen()) { keys[e.code] = true; editorKey(e.code); e.preventDefault(); return; }   // editor swallows input
   if (e.code === "KeyI" && GAME.phase !== "editor") { toggleCheatMenu(); e.preventDefault(); return; }
   if (GAME.phase === "warmup" || GAME.phase === "editor") return;

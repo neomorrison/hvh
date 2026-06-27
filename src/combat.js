@@ -178,8 +178,13 @@ export function canShoot(a) {
   }
   const tgt = cands[0].t; res.tgt = tgt;
   const directVis = visibleTo(a, tgt);
-  const order = cb.aimbot.forceBody ? ["stomach", "chest", "legs"]
+  let order = cb.aimbot.forceBody ? ["stomach", "chest", "legs"]
     : (cb.aimbot.priority === "head" ? ["head", "chest", "stomach"] : ["chest", "stomach", "head"]);
+  // baim-if-lethal: if a body shot already KILLS, take the bigger/safer body hitbox instead of the head
+  if (cb.aimbot.baimLethal && !cb.aimbot.forceBody && order[0] === "head") {
+    const cd = me.distanceTo(hitboxCenter(tgt, "chest")), bodyDmg = computeDamage(a.cur, "chest", cd, tgt.armor > 0, tgt.helmet, tgt.armor).damage;
+    if (bodyDmg >= tgt.hp) order = ["chest", "stomach", "head"];
+  }
   const minDmg = Math.max(cb.aimbot.minDmg || 1, !directVis ? (cb.autowall.minDmg || 1) : 1);
   for (const group of order) {
     const aimPoint = hitboxCenter(tgt, group);
