@@ -48,7 +48,12 @@ function rebuild() {
   for (const m of ed.group.children.slice()) { ed.group.remove(m); m.geometry.dispose(); }
   for (const b of ed.brushes) {
     const w = Math.max(1, b.max[0] - b.min[0]), h = Math.max(1, b.max[1] - b.min[1]), d = Math.max(1, b.max[2] - b.min[2]);
-    const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), b.type === 'clip' ? getMat('nodraw') : b.mats.map(getMat));
+    const geo = new THREE.BoxGeometry(w, h, d);
+    let mat;
+    if (b.type === 'clip') mat = getMat('nodraw');
+    else if (b.mapMat && ed.mapMats && ed.mapMats.get(b.mapMat)) { mat = ed.mapMats.get(b.mapMat); applyWorldUVs(geo, w, h, d, 128); }   // reuse the grabbed map texture, world-tiled to match the wall
+    else mat = b.mats.map(getMat);
+    const m = new THREE.Mesh(geo, mat);
     m.position.set((b.min[0] + b.max[0]) / 2, (b.min[1] + b.max[1]) / 2, (b.min[2] + b.max[2]) / 2);
     m.castShadow = b.type !== 'clip'; m.receiveShadow = true; m.userData.brush = b;
     ed.group.add(m);
@@ -72,10 +77,29 @@ function pushUndo() { ed._undo.push(JSON.stringify(ed.brushes)); if (ed._undo.le
 export function loadPatches(mapName, texturedScene) {
   ed.texturedScene = texturedScene || ed.texturedScene;
   ensure();
+  buildMapMatRegistry();   // index the map's materials by name so grabbed shapes can reuse the real textures
   let data = null; try { data = JSON.parse(localStorage.getItem(SKEY(mapName)) || 'null'); } catch (e) {}
   ed.brushes = (data && data.brushes) || (data && data.patches || []).map(boxToBrush);
   ed.hides = (data && data.hides) || [];
   rebuild(); applyHides();
+}
+// clone the map's materials (so we never mutate the live map) into a name→material map, with their
+// textures set to repeat-wrap so an extruded patch can tile the same texture.
+function buildMapMatRegistry() {
+  ed.mapMats = new Map(); if (!ed.texturedScene) return;
+  ed.texturedScene.traverse(o => {
+    if (!o.isMesh || !o.material) return;
+    const arr = Array.isArray(o.material) ? o.material : [o.material];
+    for (const m of arr) { const nm = m.name || o.name; if (!nm || ed.mapMats.has(nm)) continue;
+      const c = m.clone(); if (c.map) { c.map = c.map.clone(); c.map.wrapS = c.map.wrapT = THREE.RepeatWrapping; c.map.needsUpdate = true; } c.side = THREE.DoubleSide; ed.mapMats.set(nm, c); }
+  });
+}
+// set a box's UVs to world-aligned tiling so a shared (repeat-wrap) texture matches the wall density
+function applyWorldUVs(geo, w, h, d, tile) {
+  const uv = geo.attributes && geo.attributes.uv; if (!uv) return;
+  const reps = [[d, h], [d, h], [w, d], [w, d], [w, h], [w, h]];   // BoxGeometry face order: +x,-x,+y,-y,+z,-z
+  for (let f = 0; f < 6; f++) { const ru = reps[f][0] / tile, rv = reps[f][1] / tile; for (let i = 0; i < 4; i++) { const idx = f * 4 + i; uv.setXY(idx, uv.getX(idx) * ru, uv.getY(idx) * rv); } }
+  uv.needsUpdate = true;
 }
 function boxToBrush(p) { return { min: [p.x - p.w / 2, p.y - p.h / 2, p.z - p.d / 2], max: [p.x + p.w / 2, p.y + p.h / 2, p.z + p.d / 2], mats: Array(6).fill('concrete'), type: p.type || 'solid' }; }
 function save() { try { localStorage.setItem(SKEY(GAME.sourceMap), JSON.stringify({ brushes: ed.brushes, hides: ed.hides })); showHint('Saved ' + ed.brushes.length + ' brushes'); } catch (e) { showHint('Save failed: ' + e.message); } }
@@ -207,11 +231,16 @@ function onDown(e) {
   const name = viewAt(e.clientX, e.clientY); ed.hover = name;
   if (name === 'persp') {
     if (e.button === 2) { ed.drag = { kind: 'look' }; return; }
-    if (e.button === 0) {                                                     // EDIT existing brushes (never create new ones from the map)
+    if (e.button === 0) {
       const [nx, ny] = ndc('persp', e.clientX, e.clientY); _rc.setFromCamera({ x: nx, y: ny }, ed.persp);
       const bHit = _rc.intersectObjects(ed.group.children, false)[0];
-      if (!bHit) { ed.sel = null; rebuildEdges(); hud(true); return; }         // clicked the map / empty → just deselect
-      pushUndo(); const b = bHit.object.userData.brush; ed.sel = b;
+      const mHit = ed.texturedScene ? _rc.intersectObject(ed.texturedScene, true).filter(h => h.object.visible && h.face)[0] : null;
+      if (!bHit || (mHit && mHit.distance < bHit.distance)) {                  // hit the MAP → grab the shape; DRAG to extrude a matching-texture patch (a click just deselects)
+        ed.sel = null; rebuildEdges(); hud(true);
+        if (mHit) ed.drag = { kind: 'mapextrude', hit: mHit, sx: e.clientX, sy: e.clientY };
+        return;
+      }
+      pushUndo(); const b = bHit.object.userData.brush; ed.sel = b;            // hit a brush → move / resize it
       const fa = faceAxis(bHit), ax = fa.ax, u = (ax + 1) % 3, v = (ax + 2) % 3, P = bHit.point;
       const fu = (P.getComponent(u) - b.min[u]) / Math.max(1, b.max[u] - b.min[u]);
       const fv = (P.getComponent(v) - b.min[v]) / Math.max(1, b.max[v] - b.min[v]);
@@ -244,6 +273,13 @@ function onMove(e) {
     if (d.sign > 0) d.b.max[d.ax] = Math.max(d.b.min[d.ax] + GRID(), d.start + amount);
     else d.b.min[d.ax] = Math.min(d.b.max[d.ax] - GRID(), d.start - amount);
     rebuild(); return;
+  }
+  if (d.kind === 'mapextrude') {   // grabbed a map shape → on a real drag, make a matching brush and extrude it
+    if (Math.hypot(e.clientX - d.sx, e.clientY - d.sy) < 6) return;
+    pushUndo(); const made = makeMapFaceBrush(d.hit);
+    if (made) { ed.sel = made.b; startFacePull(made.b, made.ax, made.sign, d.sx, d.sy); rebuild(); onMove(e); }   // convert to a face-pull and apply this move
+    else ed.drag = null;
+    return;
   }
   if (d.kind === 'move3d') {   // slide the whole brush along the grabbed face's plane, following the cursor
     const Q = rayPlaneOnAxis(e.clientX, e.clientY, d.ax, d.P.getComponent(d.ax)); if (!Q) return;
@@ -308,6 +344,45 @@ function faceAxis(hit) {
   const ax = (Math.abs(n.x) >= Math.abs(n.y) && Math.abs(n.x) >= Math.abs(n.z)) ? 0 : (Math.abs(n.y) >= Math.abs(n.z) ? 1 : 2);
   return { ax, sign: n.getComponent(ax) < 0 ? -1 : 1, aligned: Math.abs(n.getComponent(ax)) > 0.9 };
 }
+// the registry name of the material under the hit (so a grabbed shape can reuse the wall's texture)
+function mapMatName(hit) {
+  const mat = Array.isArray(hit.object.material) ? hit.object.material[hit.face ? (hit.face.materialIndex || 0) : 0] : hit.object.material;
+  return (mat && mat.name) || hit.object.name || null;
+}
+// flood the coplanar triangles of the hit mesh near the hit point → the wall face's world rectangle
+function coplanarFaceRect(hit) {
+  const fa = faceAxis(hit); if (!fa.aligned) return null;
+  const geo = hit.object.geometry, pos = geo.attributes && geo.attributes.position; if (!pos) return null;
+  const index = geo.index, triCount = index ? index.count / 3 : pos.count / 3; if (triCount > 150000) return null;
+  const ax = fa.ax, u = (ax + 1) % 3, v = (ax + 2) % 3, planeD = hit.point.getComponent(ax), M = hit.object.matrixWorld;
+  const hu = hit.point.getComponent(u), hv = hit.point.getComponent(v), R = 1600;
+  const a = new THREE.Vector3(), b = new THREE.Vector3(), c = new THREE.Vector3(), e1 = new THREE.Vector3(), e2 = new THREE.Vector3(), tn = new THREE.Vector3();
+  const gi = (t, k) => index ? index.getX(t * 3 + k) : t * 3 + k;
+  let minU = 1e9, maxU = -1e9, minV = 1e9, maxV = -1e9, found = 0;
+  for (let t = 0; t < triCount; t++) {
+    a.fromBufferAttribute(pos, gi(t, 0)).applyMatrix4(M); b.fromBufferAttribute(pos, gi(t, 1)).applyMatrix4(M); c.fromBufferAttribute(pos, gi(t, 2)).applyMatrix4(M);
+    e1.subVectors(b, a); e2.subVectors(c, a); tn.crossVectors(e1, e2).normalize();
+    if (Math.abs(tn.getComponent(ax)) < 0.9) continue;
+    if (Math.abs((a.getComponent(ax) + b.getComponent(ax) + c.getComponent(ax)) / 3 - planeD) > 6) continue;
+    const cu = (a.getComponent(u) + b.getComponent(u) + c.getComponent(u)) / 3, cv = (a.getComponent(v) + b.getComponent(v) + c.getComponent(v)) / 3;
+    if (Math.abs(cu - hu) > R || Math.abs(cv - hv) > R) continue;
+    for (const p of [a, b, c]) { const pu = p.getComponent(u), pv = p.getComponent(v); if (pu < minU) minU = pu; if (pu > maxU) maxU = pu; if (pv < minV) minV = pv; if (pv > maxV) maxV = pv; }
+    found++;
+  }
+  return found ? { ax, sign: fa.sign, planeD, u, v, minU, maxU, minV, maxV } : null;
+}
+// grab a map shape: make a brush matching its coplanar face rectangle, reusing the wall's material
+function makeMapFaceBrush(hit) {
+  const fa = faceAxis(hit); if (!fa.aligned) { showHint('Angled face — AABB brushes only'); return null; }
+  const r = coplanarFaceRect(hit), ax = fa.ax, sign = fa.sign, u = (ax + 1) % 3, v = (ax + 2) % 3, P = hit.point, g = GRID();
+  const b = { min: [0, 0, 0], max: [0, 0, 0], mats: Array(6).fill(ed.paint), type: 'solid', mapMat: mapMatName(hit) };
+  if (r) { b.min[u] = snap(r.minU); b.max[u] = snap(r.maxU); b.min[v] = snap(r.minV); b.max[v] = snap(r.maxV); }
+  else { b.min[u] = snap(P.getComponent(u) - 96); b.max[u] = snap(P.getComponent(u) + 96); b.min[v] = snap(P.getComponent(v) - 96); b.max[v] = snap(P.getComponent(v) + 96); }
+  if (b.max[u] - b.min[u] < g) b.max[u] = b.min[u] + g; if (b.max[v] - b.min[v] < g) b.max[v] = b.min[v] + g;
+  const d0 = snap(r ? r.planeD : P.getComponent(ax));
+  if (sign > 0) { b.max[ax] = d0; b.min[ax] = d0 - g; } else { b.min[ax] = d0; b.max[ax] = d0 + g; }
+  ed.brushes.push(b); return { b, ax, sign };
+}
 // begin dragging a brush face outward/inward along its normal (resize)
 function startFacePull(b, ax, sign, mx, my) {
   const start = sign > 0 ? b.max[ax] : b.min[ax];
@@ -355,6 +430,6 @@ function hud(show) {
   _hud.style.display = 'block';
   const sw = k => '<span style="display:inline-block;width:9px;height:9px;border-radius:2px;vertical-align:middle;background:' + (k === 'nodraw' ? 'transparent;border:1px solid #889' : '#' + (MAT_DEF[k] ? MAT_DEF[k][0].toString(16).padStart(6, '0') : '888')) + '"></span>';
   _hud.innerHTML = '<b style="color:#ffd54a">🛠 BRUSH EDITOR</b> &nbsp;<span style="opacity:.85">2D pane:</span> drag=new brush · drag body=move · drag edge=stretch · RMB=pan · wheel=zoom &nbsp;|&nbsp; '
-    + '<span style="opacity:.85">3D:</span> WASD/RF fly · RMB look · <b>drag a brush = move · drag its edge = resize</b> &nbsp;|&nbsp; <b>1-7</b> material · <b>T</b> clip · <b>C</b> dup · <b>X</b> del · <b>Z</b> undo · <b>[ ]</b> depth · <b>G</b> grid ' + GRID() + ' · <b>H</b> hide · <b>P</b> save · <b>M</b> export · <b>~</b> exit'
+    + '<span style="opacity:.85">3D:</span> WASD/RF fly · RMB look · <b>drag a brush=move · its edge=resize · drag a MAP face=pull out a matching patch</b> &nbsp;|&nbsp; <b>1-7</b> material · <b>T</b> clip · <b>C</b> dup · <b>X</b> del · <b>Z</b> undo · <b>[ ]</b> depth · <b>G</b> grid ' + GRID() + ' · <b>H</b> hide · <b>P</b> save · <b>M</b> export · <b>~</b> exit'
     + '<br>paint ' + sw(ed.paint) + ' ' + ed.paint + ' · depth ' + Math.round(ed.depth.x) + ',' + Math.round(ed.depth.y) + ',' + Math.round(ed.depth.z) + ' · brushes <b>' + ed.brushes.length + '</b>' + (ed.sel ? ' · <span style="color:#ffd54a">selected ' + ed.sel.type + '</span>' : '');
 }

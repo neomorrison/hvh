@@ -15,6 +15,7 @@ export function buildCheatMenu() {
       sel("Target", "aimTarget", ["crosshair", "distance", "lowhp"], () => c.aimbot.target, v => c.aimbot.target = v),
       sel("Hitbox priority", "aimPrio", ["head", "body"], () => c.aimbot.priority === "head" ? "head" : "body", v => c.aimbot.priority = v === "head" ? "head" : "chest"),
       sw("Force body aim (baim)", () => c.aimbot.forceBody, v => c.aimbot.forceBody = v, "F2"),
+      sw("Baim if lethal (body when it kills)", () => c.aimbot.baimLethal, v => c.aimbot.baimLethal = v),
       sw("Safepoint", () => c.aimbot.safepoint, v => c.aimbot.safepoint = v),
       rng("Hit chance %", 0, 100, () => c.aimbot.hitchance, v => c.aimbot.hitchance = v),
       rng("Min damage", 1, 101, () => c.aimbot.minDmg, v => c.aimbot.minDmg = v),
@@ -54,7 +55,7 @@ export function buildCheatMenu() {
       sw("Chams (wallhack through walls)", () => c.visuals.chams, v => c.visuals.chams = v, "F8"),
       col("Chams: visible color", () => c.visuals.chamsVisible, v => c.visuals.chamsVisible = v),
       col("Chams: occluded color", () => c.visuals.chamsOccluded, v => c.visuals.chamsOccluded = v),
-      sw("Show my desync hitbox (local)", () => c.visuals.desyncBox, v => c.visuals.desyncBox = v),
+      sw("Desync ghost model (local)", () => c.visuals.desyncGhost, v => c.visuals.desyncGhost = v),
     ] },
   ];
   body.innerHTML = "";

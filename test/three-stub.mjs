@@ -4,7 +4,7 @@
    (Mesh/Material/Geometry/Lights/Renderer) are inert. */
 
 export const PCFSoftShadowMap = 1;
-export const DoubleSide = 2, FrontSide = 0, BackSide = 1;
+export const DoubleSide = 2, FrontSide = 0, BackSide = 1, RepeatWrapping = 1000;
 export class BufferAttribute { constructor(array, itemSize) { this.array = array; this.itemSize = itemSize; this.count = array ? array.length / itemSize : 0; } }
 export class Float32BufferAttribute extends BufferAttribute {}
 
@@ -77,7 +77,7 @@ class Object3D {
 export class Group extends Object3D {}
 export class Scene extends Object3D { constructor() { super(); this.background = null; this.fog = null; } }
 
-class Mat { constructor(o = {}) { Object.assign(this, o); this.color = new Color(o.color || 0); this.emissive = new Color(o.emissive || 0); this.emissiveIntensity = o.emissiveIntensity ?? 1; } dispose() {} }
+class Mat { constructor(o = {}) { Object.assign(this, o); this.color = new Color(o.color || 0); this.emissive = new Color(o.emissive || 0); this.emissiveIntensity = o.emissiveIntensity ?? 1; } dispose() {} clone() { return new Mat(this); } }
 export class MeshStandardMaterial extends Mat {}
 export class MeshBasicMaterial extends Mat {}
 export class LineBasicMaterial extends Mat {}

@@ -108,12 +108,12 @@ export function setViewmodel(key, isNade) {
 export function defaultCheats(aggressive) {
   return {
     aimbot: { on: aggressive, fov: aggressive ? 180 : 30, hitchance: aggressive ? 78 : 50, minDmg: 1, silent: true,
-      autoShoot: aggressive, autoScope: true, autoStop: aggressive, autoKnife: aggressive, autoRevolver: true, target: "crosshair", priority: "head", forceBody: false, safepoint: false },
+      autoShoot: aggressive, autoScope: true, autoStop: aggressive, autoKnife: aggressive, autoRevolver: true, target: "crosshair", priority: "head", forceBody: false, baimLethal: false, safepoint: false },
     autowall: { on: aggressive, minDmg: 30 },
     resolver: { on: aggressive, accuracy: 0.7, mode: "animation" },   // accuracy = internal resolve PROBABILITY (no UI slider; bots overridden by persona.res)
     antiaim: { on: aggressive, yaw: "jitter", jitter: 55, pitch: "down", desync: true, desyncAngle: 58, mode: "at_target", fakeduck: false },
     tickbase: { backtrack: aggressive ? 200 : 0 },
-    visuals: { esp: false, boxes: true, health: true, name: true, distance: false, snaplines: false, chams: false, desyncBox: false, chamsVisible: '#ff2a44', chamsOccluded: '#7a4cff' },
+    visuals: { esp: false, boxes: true, health: true, name: true, distance: false, snaplines: false, chams: false, desyncGhost: false, chamsVisible: '#ff2a44', chamsOccluded: '#7a4cff' },
   };
 }
 
@@ -208,10 +208,14 @@ export function updateAgentVisual(a) {
     const ang = (aa.desyncAngle || 45) * Math.PI / 180, side = a.desyncSide || 1, mag = (16 + 14 * Math.sin(ang)) * side;
     (a._desyncOff || (a._desyncOff = new THREE.Vector3())).set(Math.cos(a.yaw) * mag, 0, -Math.sin(a.yaw) * mag);
   } else a._desyncOff = null;
-  if (a.isHuman && !GAME.thirdPerson) { a.body.g.visible = false; return; }
+  // DESYNC GHOST: render the LOCAL player's desynced body as a translucent ghost cham (even in first
+  // person) so you can see where your fake angle points.
+  const ghost = a.isHuman && human && human.cheats.visuals && human.cheats.visuals.desyncGhost && a.alive;
+  if (a.isHuman && !GAME.thirdPerson && !ghost) { a.body.g.visible = false; return; }
   if (!a.alive) { a.body.g.visible = false; return; }
   a.body.g.visible = true;
-  if (human && !a.isHuman && a.team !== human.team) {     // chams: colour by line-of-sight (visible vs occluded)
+  if (a.isHuman) applyGhost(a, !GAME.thirdPerson && ghost);   // ghost only in first person; normal model in third
+  else if (human && a.team !== human.team) {                  // chams: colour by line-of-sight (visible vs occluded)
     const vz = human.cheats.visuals || {};
     if (vz.chams) applyChams(a, true, chamsVisible(human, a), vz.chamsVisible || '#ff2a44', vz.chamsOccluded || '#7a4cff');
     else applyChams(a, false);
@@ -237,6 +241,14 @@ export function updateAgentVisual(a) {
   a.body.holder.rotation.x = -a.pitch;
 }
 function chamsVisible(human, a) { const e = eyePos(human); return losClear(e, hitboxCenter(a, 'chest')) || losClear(e, hitboxCenter(a, 'head')); }
+// local desync ghost: translucent see-through cyan model so you can read your own fake angle
+function applyGhost(a, on) {
+  const key = on ? 'ghost' : 'off'; if (a._ghostKey === key) return; a._ghostKey = key;
+  a.body.g.traverse(o => { if (o.isMesh) {
+    o.material.transparent = on; o.material.opacity = on ? 0.4 : 1; o.material.depthWrite = !on; o.material.depthTest = !on; o.renderOrder = on ? 992 : 0;
+    if (o.material.emissive) { o.material.emissive.setHex(on ? 0x33ddff : 0x000000); o.material.emissiveIntensity = on ? 0.5 : 1; }
+  } });
+}
 export function applyChams(a, on, visible, visCol, occCol) {
   const col = on ? (visible ? (visCol || '#ff2a44') : (occCol || '#7a4cff')) : null;
   const key = on ? (visible ? 'v' : 'o') + col : 'off';
