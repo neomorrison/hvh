@@ -16,17 +16,17 @@ export const HITGROUP = { head: 4.0, chest: 1.0, arms: 1.0, stomach: 1.25, legs:
 
 // armorPen given as community percent; flArmorRatio = pct/100 (see spec §3.5)
 export const WEAPONS = {
-  glock:  { name: "Glock-18",      slot: 1, side: "T",   cost: 200,  dmg: 30, penPct: 47,   rpm: 300, mag: 20, reserve: 60, reload: 2.17, run: 240, range: 0.85, kill: 300, auto: false, mode: "burst" },
+  glock:  { name: "Glock-18",      slot: 1, side: "T",   cost: 200,  dmg: 30, penPct: 47,   rpm: 300, mag: 20, reserve: 60, reload: 2.27, run: 240, range: 0.85, kill: 300, auto: false, mode: "burst" },
   usp:    { name: "USP-S",         slot: 1, side: "CT",  cost: 200,  dmg: 35, penPct: 50.5, rpm: 300, mag: 12, reserve: 24, reload: 2.17, run: 240, range: 0.99, kill: 300, auto: false },
-  duals:  { name: "Dual Berettas", slot: 1, side: "both",cost: 300,  dmg: 35, penPct: 57.5, rpm: 400, mag: 30, reserve: 60, reload: 3.8,  run: 240, range: 0.75, kill: 300, auto: false },
+  duals:  { name: "Dual Berettas", slot: 1, side: "both",cost: 300,  dmg: 35, penPct: 57.5, rpm: 400, mag: 30, reserve: 60, reload: 3.77, run: 240, range: 0.75, kill: 300, auto: false },
   deagle: { name: "Desert Eagle",  slot: 1, side: "both",cost: 700,  dmg: 63, penPct: 93.2, rpm: 267, mag: 7,  reserve: 21, reload: 2.2,  run: 230, range: 0.94, kill: 300, auto: false },
   // R8 Revolver — CS2 primary is a slow, deliberate hammer-cock shot; the fan
   // (alt-fire) is faster but inaccurate.  cockTime/cycle govern the real time
   // between shots so it can no longer be spammed faster than CS2.
-  r8:     { name: "R8 Revolver",   slot: 1, side: "both",cost: 600,  dmg: 86, penPct: 93.2, rpm: 120, mag: 8,  reserve: 16, reload: 2.25, run: 220, range: 0.98, kill: 300, auto: false, mode: "r8", cockTime: 0.25, cyclePrimary: 0.25, cycleFan: 0.30 },
-  ssg:    { name: "SSG08",         slot: 2, side: "both",cost: 1700, dmg: 88, penPct: 85,   rpm: 48,  mag: 10, reserve: 20, reload: 3.7,  run: 230, range: 0.99, kill: 300, auto: false, scope: 1, scopedRun: 230 },
-  scar:   { name: "SCAR-20",       slot: 2, side: "CT",  cost: 5000, dmg: 80, penPct: 82.5, rpm: 240, mag: 20, reserve: 40, reload: 3.1,  run: 215, range: 0.99, kill: 300, auto: true,  scope: 1, scopedRun: 120 },
-  g3:     { name: "G3SG1",         slot: 2, side: "T",   cost: 5000, dmg: 80, penPct: 82.5, rpm: 240, mag: 20, reserve: 40, reload: 4.7,  run: 215, range: 0.99, kill: 300, auto: true,  scope: 1, scopedRun: 120 },
+  r8:     { name: "R8 Revolver",   slot: 1, side: "both",cost: 600,  dmg: 86, penPct: 93.2, rpm: 120, mag: 8,  reserve: 16, reload: 2.27, run: 220, range: 0.98, kill: 300, auto: false, mode: "r8", cockTime: 0.25, cyclePrimary: 0.25, cycleFan: 0.30 },
+  ssg:    { name: "SSG08",         slot: 2, side: "both",cost: 1700, dmg: 88, penPct: 85,   rpm: 48,  mag: 10, reserve: 20, reload: 3.67, run: 230, range: 0.99, kill: 300, auto: false, scope: 1, scopedRun: 230 },
+  scar:   { name: "SCAR-20",       slot: 2, side: "CT",  cost: 5000, dmg: 80, penPct: 82.5, rpm: 240, mag: 20, reserve: 40, reload: 3.07, run: 215, range: 0.99, kill: 300, auto: true,  scope: 1, scopedRun: 120 },
+  g3:     { name: "G3SG1",         slot: 2, side: "T",   cost: 5000, dmg: 80, penPct: 82.5, rpm: 240, mag: 20, reserve: 40, reload: 4.67, run: 215, range: 0.99, kill: 300, auto: true,  scope: 1, scopedRun: 120 },
   knife:  { name: "Knife",         slot: 3, side: "both",cost: 0, melee: true, run: 250, kill: 1500,
             slashFront: 40, slashBack: 90, stabFront: 65, stabBack: 180, knifeRange: 62, slashCd: 0.42, stabCd: 1.05 },
 };

@@ -39,6 +39,7 @@ const ed = {
   drag: null, _undo: [], _vm: [],
 };
 export function isEditorOpen() { return ed.on; }
+export function editorDebug() { return { hasTexturedScene: !!ed.texturedScene, texChildren: ed.texturedScene ? ed.texturedScene.children.length : 0, mapMats: ed.mapMats ? ed.mapMats.size : -1, hover: ed.hover, brushes: ed.brushes.length, on: ed.on }; }
 const GRID = () => GRIDS[ed.gi];
 const snap = v => Math.round(v / GRID()) * GRID();
 
@@ -65,7 +66,7 @@ function rebuildEdges() {
   for (const b of ed.brushes) {
     const w = Math.max(1, b.max[0] - b.min[0]), h = Math.max(1, b.max[1] - b.min[1]), d = Math.max(1, b.max[2] - b.min[2]);
     const e = new THREE.LineSegments(new THREE.EdgesGeometry(new THREE.BoxGeometry(w, h, d)), new THREE.LineBasicMaterial({ color: b === ed.sel ? 0xffd54a : b.type === 'clip' ? 0x4aa0ff : 0x46e06a }));
-    e.position.set((b.min[0] + b.max[0]) / 2, (b.min[1] + b.max[1]) / 2, (b.min[2] + b.max[2]) / 2);
+    e.position.set((b.min[0] + b.max[0]) / 2, (b.min[1] + b.max[1]) / 2, (b.min[2] + b.max[2]) / 2); e.userData.brush = b;
     ed.edgeGroup.add(e);
   }
   if (ed.sel) { const b = ed.sel; ed.selBox.visible = true; ed.selBox.position.set((b.min[0] + b.max[0]) / 2, (b.min[1] + b.max[1]) / 2, (b.min[2] + b.max[2]) / 2); ed.selBox.scale.set(Math.max(1, b.max[0] - b.min[0]), Math.max(1, b.max[1] - b.min[1]), Math.max(1, b.max[2] - b.min[2])); }
@@ -207,8 +208,11 @@ function paneSetup(x, y, w, h, clear) { renderer.setViewport(x, y, w, h); render
 function orthoPane(name, x, y, w, h) {
   const v = ed.ov[name], cam = ed.oc[name]; configOrtho(cam, name, v.cu, v.cv, w, h);
   paneSetup(x, y, w, h, 0x0a0e14);
-  ed.group.visible = false; scene.overrideMaterial = ed.wireDim; renderer.render(scene, cam); scene.overrideMaterial = null; ed.group.visible = true;   // map as dim wireframe
-  for (const k in ed.grids) ed.grids[k].visible = (k === name); renderer.render(ed.overlay, cam);   // grid + bright brush edges on top
+  if (!ed.isolate) { ed.group.visible = false; scene.overrideMaterial = ed.wireDim; renderer.render(scene, cam); scene.overrideMaterial = null; ed.group.visible = true; }   // map as dim wireframe (hidden when isolating the selected)
+  for (const k in ed.grids) ed.grids[k].visible = (k === name);
+  if (ed.isolate) for (const e of ed.edgeGroup.children) e.visible = (e.userData.brush === ed.sel);   // show ONLY the selected brush's edges
+  renderer.render(ed.overlay, cam);                                                                   // grid + brush edges on top
+  if (ed.isolate) for (const e of ed.edgeGroup.children) e.visible = true;                            // restore for the 3D pass / next frame
 }
 
 /* ============================== mouse ============================== */
@@ -235,10 +239,10 @@ function onDown(e) {
       const [nx, ny] = ndc('persp', e.clientX, e.clientY); _rc.setFromCamera({ x: nx, y: ny }, ed.persp);
       const bHit = _rc.intersectObjects(ed.group.children, false)[0];
       const mHit = ed.texturedScene ? _rc.intersectObject(ed.texturedScene, true).filter(h => h.object.visible && h.face)[0] : null;
-      if (!bHit || (mHit && mHit.distance < bHit.distance)) {                  // hit the MAP → grab the shape; DRAG to extrude a matching-texture patch (a click just deselects)
-        ed.sel = null; rebuildEdges(); hud(true);
-        if (mHit) ed.drag = { kind: 'mapextrude', hit: mHit, sx: e.clientX, sy: e.clientY };
-        return;
+      if (!bHit || (mHit && mHit.distance < bHit.distance)) {                  // hit the MAP → SELECT that wall as an editable patch (matches its texture); then drag it longer in the 2D grids
+        if (mHit) { const ex = existingPatchAt(mHit); if (ex) { ed.sel = ex; rebuildEdges(); } else { pushUndo(); const made = makeMapFaceBrush(mHit); ed.sel = made ? made.b : null; if (made) rebuild(); else rebuildEdges(); } }
+        else { ed.sel = null; rebuildEdges(); }
+        hud(true); return;
       }
       pushUndo(); const b = bHit.object.userData.brush; ed.sel = b;            // hit a brush → move / resize it
       const fa = faceAxis(bHit), ax = fa.ax, u = (ax + 1) % 3, v = (ax + 2) % 3, P = bHit.point;
@@ -273,13 +277,6 @@ function onMove(e) {
     if (d.sign > 0) d.b.max[d.ax] = Math.max(d.b.min[d.ax] + GRID(), d.start + amount);
     else d.b.min[d.ax] = Math.min(d.b.max[d.ax] - GRID(), d.start - amount);
     rebuild(); return;
-  }
-  if (d.kind === 'mapextrude') {   // grabbed a map shape → on a real drag, make a matching brush and extrude it
-    if (Math.hypot(e.clientX - d.sx, e.clientY - d.sy) < 6) return;
-    pushUndo(); const made = makeMapFaceBrush(d.hit);
-    if (made) { ed.sel = made.b; startFacePull(made.b, made.ax, made.sign, d.sx, d.sy); rebuild(); onMove(e); }   // convert to a face-pull and apply this move
-    else ed.drag = null;
-    return;
   }
   if (d.kind === 'move3d') {   // slide the whole brush along the grabbed face's plane, following the cursor
     const Q = rayPlaneOnAxis(e.clientX, e.clientY, d.ax, d.P.getComponent(d.ax)); if (!Q) return;
@@ -371,6 +368,16 @@ function coplanarFaceRect(hit) {
   }
   return found ? { ax, sign: fa.sign, planeD, u, v, minU, maxU, minV, maxV } : null;
 }
+// is there already a patch brush flush to this clicked wall face (so a re-click selects it, not a dupe)?
+function existingPatchAt(hit) {
+  const fa = faceAxis(hit); if (!fa.aligned) return null;
+  const ax = fa.ax, u = (ax + 1) % 3, v = (ax + 2) % 3, P = hit.point, d0 = P.getComponent(ax), pu = P.getComponent(u), pv = P.getComponent(v);
+  for (const b of ed.brushes) {
+    if (Math.abs(b.min[ax] - d0) > GRID() && Math.abs(b.max[ax] - d0) > GRID()) continue;   // a face near the wall plane
+    if (pu >= b.min[u] - 1 && pu <= b.max[u] + 1 && pv >= b.min[v] - 1 && pv <= b.max[v] + 1) return b;
+  }
+  return null;
+}
 // grab a map shape: make a brush matching its coplanar face rectangle, reusing the wall's material
 function makeMapFaceBrush(hit) {
   const fa = faceAxis(hit); if (!fa.aligned) { showHint('Angled face — AABB brushes only'); return null; }
@@ -402,6 +409,7 @@ export function editorKey(code) {
   if (code === 'KeyP') { save(); return true; }
   if (code === 'KeyM') { exportJSON(); return true; }
   if (code === 'KeyH') { hideSurface(); return true; }
+  if (code === 'KeyI') { ed.isolate = !ed.isolate; hud(true); return true; }   // isolate: 2D grids show ONLY the selected brush
   if (code === 'BracketLeft' || code === 'BracketRight') { const t = third(ed.hover === 'persp' ? 'top' : ed.hover); ed.depth[t] += (code === 'BracketRight' ? GRID() : -GRID()); hud(true); return true; }
   if (code === 'KeyB') { pushUndo(); const c = ed.depth; const b = { min: [snap(c.x - 32), snap(c.y), snap(c.z - 32)], max: [snap(c.x + 32), snap(c.y + 128), snap(c.z + 32)], mats: Array(6).fill(ed.paint), type: 'solid' }; ed.brushes.push(b); ed.sel = b; rebuild(); hud(true); return true; }
   if (ed.sel) {
@@ -429,7 +437,7 @@ function hud(show) {
   if (!ed.on) { _hud.style.display = 'none'; return; }
   _hud.style.display = 'block';
   const sw = k => '<span style="display:inline-block;width:9px;height:9px;border-radius:2px;vertical-align:middle;background:' + (k === 'nodraw' ? 'transparent;border:1px solid #889' : '#' + (MAT_DEF[k] ? MAT_DEF[k][0].toString(16).padStart(6, '0') : '888')) + '"></span>';
-  _hud.innerHTML = '<b style="color:#ffd54a">🛠 BRUSH EDITOR</b> &nbsp;<span style="opacity:.85">2D pane:</span> drag=new brush · drag body=move · drag edge=stretch · RMB=pan · wheel=zoom &nbsp;|&nbsp; '
-    + '<span style="opacity:.85">3D:</span> WASD/RF fly · RMB look · <b>drag a brush=move · its edge=resize · drag a MAP face=pull out a matching patch</b> &nbsp;|&nbsp; <b>1-7</b> material · <b>T</b> clip · <b>C</b> dup · <b>X</b> del · <b>Z</b> undo · <b>[ ]</b> depth · <b>G</b> grid ' + GRID() + ' · <b>H</b> hide · <b>P</b> save · <b>M</b> export · <b>~</b> exit'
-    + '<br>paint ' + sw(ed.paint) + ' ' + ed.paint + ' · depth ' + Math.round(ed.depth.x) + ',' + Math.round(ed.depth.y) + ',' + Math.round(ed.depth.z) + ' · brushes <b>' + ed.brushes.length + '</b>' + (ed.sel ? ' · <span style="color:#ffd54a">selected ' + ed.sel.type + '</span>' : '');
+  _hud.innerHTML = '<b style="color:#ffd54a">🛠 MAP EDITOR</b> &nbsp;<span style="opacity:.85">3D:</span> <b>click a wall = select it</b> (reuses its texture) · drag a brush=move · its edge=resize · WASD/RF fly · RMB look<br>'
+    + '<span style="opacity:.85">2D grids:</span> <b>drag the selected wall’s edge to make it longer/fuller</b> · RMB=pan · wheel=zoom &nbsp;|&nbsp; <b>I</b> isolate selected ' + (ed.isolate ? '<span style="color:#ffd54a">ON</span>' : 'off') + ' · <b>X</b> del · <b>Z</b> undo · <b>[ ]</b> depth · <b>G</b> grid ' + GRID() + ' · <b>P</b> save · <b>M</b> export · <b>~</b> exit'
+    + '<br>brushes <b>' + ed.brushes.length + '</b>' + (ed.sel ? ' · <span style="color:#ffd54a">selected ' + ed.sel.type + (ed.sel.mapMat ? ' (' + ed.sel.mapMat + ')' : '') + '</span>' : ' · <span style="opacity:.5">nothing selected — click a wall</span>');
 }
