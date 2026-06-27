@@ -208,13 +208,13 @@ export function updateAgentVisual(a) {
     const ang = (aa.desyncAngle || 45) * Math.PI / 180, side = a.desyncSide || 1, mag = (16 + 14 * Math.sin(ang)) * side;
     (a._desyncOff || (a._desyncOff = new THREE.Vector3())).set(Math.cos(a.yaw) * mag, 0, -Math.sin(a.yaw) * mag);
   } else a._desyncOff = null;
-  // DESYNC GHOST: render the LOCAL player's desynced body as a translucent ghost cham (even in first
-  // person) so you can see where your fake angle points.
+  // DESYNC GHOST: a translucent ghost cham of the LOCAL player's desynced body, shown only in THIRD
+  // person (first person always hides the local body), so you can read your fake angle from behind.
   const ghost = a.isHuman && human && human.cheats.visuals && human.cheats.visuals.desyncGhost && a.alive;
-  if (a.isHuman && !GAME.thirdPerson && !ghost) { a.body.g.visible = false; return; }
+  if (a.isHuman && !GAME.thirdPerson) { a.body.g.visible = false; return; }   // first person never shows the local body
   if (!a.alive) { a.body.g.visible = false; return; }
   a.body.g.visible = true;
-  if (a.isHuman) applyGhost(a, !GAME.thirdPerson && ghost);   // ghost only in first person; normal model in third
+  if (a.isHuman) applyGhost(a, GAME.thirdPerson && ghost);   // desync cham only in third person; normal model otherwise
   else if (human && a.team !== human.team) {                  // chams: colour by line-of-sight (visible vs occluded)
     const vz = human.cheats.visuals || {};
     if (vz.chams) applyChams(a, true, chamsVisible(human, a), vz.chamsVisible || '#ff2a44', vz.chamsOccluded || '#7a4cff');

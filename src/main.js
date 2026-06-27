@@ -24,7 +24,7 @@ import { buildDefaultMap } from './map.js';
 import { loadSourceMap } from './sourcemap_load.js';
 import { meshBackend } from './sourcemap.js';
 import { setListener, sfxScope, unlockAudio, sfxRevolverCock, setSfxMute } from './sfx.js';
-import { toggleEditor, isEditorOpen, editorUpdate, editorRender, editorKey, loadPatches } from './editor.js';
+import { toggleEditor, isEditorOpen, editorUpdate, editorRender, editorKey, loadPatches, editorDebug } from './editor.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
 const $ = s => document.querySelector(s);
@@ -471,7 +471,7 @@ function boot() {
 window.HVH = {
   get GAME() { return GAME; }, get agents() { return agents; }, get human() { return refs.human; },
   WEAPONS, ECON, computeDamage, WALLS, NODES, EDGES, segAABB, losClear, penetrate, camera, scene, renderer, meshBackend,
-  deploy, deploySource,
+  deploy, deploySource, editorDebug,
   fastForward(secs) { const dt = 1 / 60; let t = 0; while (t < secs) { step(dt); t += dt; } return { phase: GAME.phase, score: [GAME.scoreCT, GAME.scoreT] }; },
   computeBloom(a) { return computeBloom(a || refs.human); },
   testGrenade() { refs.human.nades = { he: 1, flash: 1 }; equipGrenade(); const eq = refs.human.equippedNade; const before = nadeProjectiles.length; const ok = throwNade(refs.human, eq); return { equipped: eq, threw: ok, projectilesBefore: before, projectilesAfter: nadeProjectiles.length, remaining: refs.human.nades[eq] }; },
