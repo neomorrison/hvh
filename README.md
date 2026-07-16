@@ -1,12 +1,12 @@
 # cs_office HvH
 
-A browser-based **Counter-Strike 2 "Hack vs Hack"** game — 1 human + 4 bots vs 5 bots on an original recreation of the `cs_office` layout. Everyone cheats.
+A browser-based **Counter-Strike 2 "Hack vs Hack"** game — 1 human and bots on an original recreation of the `cs_office` layout. Everyone cheats.
 
 ## Play
 
 **[▶ Play it here](https://neomorrison.github.io/hvh/)** (GitHub Pages)
 
-The game is now split into ES modules under `src/`, so it must be **served over HTTP** (modules can't load from `file://`). To run locally:
+The game is split into ES modules under `src/`, so it must be **served over HTTP** (modules can't load from `file://`). To run locally:
 
 ```bash
 # from the repo root
@@ -14,19 +14,15 @@ python3 -m http.server 8000
 # then open http://localhost:8000/
 ```
 
-(Chrome recommended. No build step — Three.js loads from a CDN via the import map.)
-
 ## Features
 
-- **MR12** (best-of-24, switch sides at half, first to 13) with the exact CS2 economy — round win/loss rewards, the 1400→3400 loss-bonus ladder, kill rewards, and hostage-rescue payouts.
+- **MR12** (best-of-24, switch sides at half, first to 13) with a CS2-inspired economy.
 - **Faithful damage model** — CS2 hitgroup multipliers, the real armor formula, and the exact distance falloff (`base × range_modifier^(dist/500)`).
-- **Bullet penetration (autowall)** — shooting through walls **costs damage** (scaled by surface thickness & material), and a wall too thick/dense for the weapon's penetration power **stops the bullet** entirely. Applies to manual fire and the aimbot.
-- **Faithful inaccuracy** — movement, jump, crouch, spray, recovery, flinch **and landing penalty** (you can't be pin-point accurate the instant you touch the ground, just like CS2).
+- **Bullet penetration (autowall)** — shooting through walls **costs damage** (scaled by surface thickness & material), and a wall too thick/dense for the weapon's penetration power **stops the bullet** entirely. 
+- **Faithful inaccuracy** — movement, jump, crouch, spray, recovery, flinch and landing penalty.
 - **Weapons:** R8 Revolver (slow hammer-cock primary + faster fan, both with real CS2 cadence), Desert Eagle, Dual Berettas, USP-S / Glock-18, SSG08, SCAR-20 / G3SG1, plus a knife and grenades — CS2-accurate cost, damage and fire rate.
 - **HvH bots** with unique handles & playstyles, each running aimbot, anti-aim, resolver, autowall, body-aim, and auto-knife when out of ammo.
-- **Cheat menu (press `I`)** — aimbot (FOV, hitchance, silent, triggerbot, auto-stop, auto-scope, auto-knife, auto-revolver), autowall, resolver, anti-aim, backtrack, and wallhack/ESP. Min-damage, autowall-min-damage and hit-chance are now strictly respected (the aimbot won't fire unless a hitbox actually meets the threshold). Config saves to your browser.
-- **🛠 Map Builder** — a top-down level editor (button on the start screen). Draw/move/delete walls, drop props (desks, cabinets, cars, vans, crates, cubicles…), place CT/T spawns, hostages and rescue zones, then **Play** to test. Bot navigation is auto-generated for any layout. Maps save to your browser and export/import as JSON.
-- **🗺️ Import real CS2 maps (offline)** — decompile a map's geometry to `.glb` with Source2Viewer and load it (plus a spawns `.json`) from the start screen. The game runs on the **exact mesh** — mesh line-of-sight, autowall/penetration, multi-level floors and wall collision — with auto-generated bot nav and your real spawns. Textures are ignored; nothing from Valve is bundled (you load your own files). See [`tools/IMPORT.md`](tools/IMPORT.md).
+- **Cheat menu (press `I`)** — aimbot (FOV, hitchance, silent, triggerbot, auto-stop, auto-scope, auto-knife, auto-revolver), autowall, resolver, anti-aim, backtrack, and wallhack/ESP. Config saves to your browser.
 
 ## Controls
 
@@ -58,17 +54,8 @@ src/
 test/             Node smoke-test harness (stubbed Three/DOM) — see below
 ```
 
-## Tests
-
-A Node smoke test loads every module under a stubbed Three.js + DOM, starts a match and
-fast-forwards a few rounds to catch wiring/logic regressions:
-
-```bash
-node --import ./test/register.mjs ./test/smoke.mjs
-```
-
 ## Notes
 
 Original fan project for personal/educational use. Economy, weapon stats, and gameplay reproduce Counter-Strike 2 *mechanics*; the engine code is original.
 
-The `cs_office` map is decompiled/extracted from CS2: `maps/cs_office.glb` is the geometry and `maps/cs_office.tex.glb` is the textured render (loaded at runtime; regenerate with [tools/TEXTURES.md](tools/TEXTURES.md)). **These map/texture assets are Valve's intellectual property, included here only for this personal/private project — not licensed for redistribution.**
+**The map/texture assets are Valve's intellectual property, included here only for this personal/private project — not licensed for redistribution.**
