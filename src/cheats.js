@@ -1,6 +1,7 @@
 /* ============================== [CHEAT] ==============================
    The player cheat menu (press I) and its localStorage/cookie config.      */
 import { renderer } from './core.js';
+import { MAX_BACKTRACK_TICKS, TICK_RATE } from './data.js';
 import { refs, GAME } from './state.js';
 import { defaultCheats } from './agents.js';
 import { showHint, updateHUDWeapons } from './hud.js';
@@ -42,8 +43,9 @@ export function buildCheatMenu() {
       sel("Mode", "aaMode", ["at_target", "freestanding"], () => c.antiaim.mode, v => c.antiaim.mode = v),
       sw("Fake duck", () => c.antiaim.fakeduck, v => c.antiaim.fakeduck = v),
     ] },
-    { title: "⏱ Backtrack", rows: [
-      rng("Backtrack (ms)", 0, 400, () => c.tickbase.backtrack, v => c.tickbase.backtrack = v),
+    { title: "⏱ Tickbase / Backtrack", rows: [
+      rng("Backtrack (ticks)", 0, MAX_BACKTRACK_TICKS, () => c.tickbase.backtrack, v => c.tickbase.backtrack = v, t => `${t} tk · ${Math.round(t * 1000 / TICK_RATE)}ms`),
+      sw("Hide shots (fire without pinning your real angle)", () => c.tickbase.hideShots, v => c.tickbase.hideShots = v),
     ] },
     { title: "👁 Visuals (Wallhack / ESP)", rows: [
       sw("ESP enabled", () => c.visuals.esp, v => c.visuals.esp = v, "F7"),
@@ -56,6 +58,8 @@ export function buildCheatMenu() {
       col("Chams: visible color", () => c.visuals.chamsVisible, v => c.visuals.chamsVisible = v),
       col("Chams: occluded color", () => c.visuals.chamsOccluded, v => c.visuals.chamsOccluded = v),
       sw("Desync ghost model (local)", () => c.visuals.desyncGhost, v => c.visuals.desyncGhost = v),
+      sw("Backtrack trail (your own rewindable hitboxes)", () => c.visuals.backtrackTrail, v => c.visuals.backtrackTrail = v),
+      sw("Backtrack ghost (the tick a rewound shot landed on)", () => c.visuals.backtrackGhost, v => c.visuals.backtrackGhost = v),
     ] },
   ];
   body.innerHTML = "";
@@ -79,11 +83,12 @@ function sw(label, get, set, key) {
   const cb = row.querySelector("input"); cb.checked = get(); cb.onchange = () => { set(cb.checked); updateHUDWeapons(); };
   row._sync = () => cb.checked = get(); return row;
 }
-function rng(label, min, max, get, set) {
+function rng(label, min, max, get, set, fmt) {
+  const show = v => (fmt ? fmt(v) : v);
   const row = document.createElement("div"); row.className = "crow";
-  row.innerHTML = `<label>${label}</label><input type="range" min="${min}" max="${max}" value="${get()}"><span class="cval">${get()}</span>`;
+  row.innerHTML = `<label>${label}</label><input type="range" min="${min}" max="${max}" value="${get()}"><span class="cval${fmt ? " wide" : ""}">${show(get())}</span>`;
   const r = row.querySelector("input"), v = row.querySelector(".cval");
-  r.oninput = () => { set(+r.value); v.textContent = r.value; }; row._sync = () => { r.value = get(); v.textContent = get(); }; return row;
+  r.oninput = () => { set(+r.value); v.textContent = show(+r.value); }; row._sync = () => { r.value = get(); v.textContent = show(get()); }; return row;
 }
 function col(label, get, set) {
   const row = document.createElement("div"); row.className = "crow";
@@ -113,6 +118,13 @@ export function loadConfig() {
   try { json = localStorage.getItem("hvh_cfg"); } catch (e) {}
   if (!json) { try { const m = document.cookie.match(/(?:^|;\s*)hvh_cfg=([^;]+)/); if (m) json = decodeURIComponent(m[1]); } catch (e) {} }
   if (!json) return false;
-  try { deepMerge(refs.human.cheats, JSON.parse(json)); return true; } catch (e) { return false; }
+  try {
+    const cfg = JSON.parse(json);
+    // backtrack used to be a millisecond slider (0-400). Anything above the tick cap is an old config —
+    // convert it rather than silently clamping a "200" that meant 200ms down to the 16-tick maximum.
+    if (cfg.tickbase && cfg.tickbase.backtrack > MAX_BACKTRACK_TICKS) cfg.tickbase.backtrack = Math.min(MAX_BACKTRACK_TICKS, Math.round(cfg.tickbase.backtrack * TICK_RATE / 1000));
+    deepMerge(refs.human.cheats, cfg);
+    return true;
+  } catch (e) { return false; }
 }
 function deepMerge(target, src) { for (const k in src) { if (src[k] && typeof src[k] === "object" && !Array.isArray(src[k]) && target[k]) deepMerge(target[k], src[k]); else target[k] = src[k]; } }
