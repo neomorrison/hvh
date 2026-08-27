@@ -8,7 +8,7 @@ import { agents, refs, GAME, vm, clock, keys, input } from './state.js';
 import { WALLS, NODES, EDGES, segAABB, losClear, penetrate } from './world.js';
 import { updateEffects, nadeProjectiles } from './effects.js';
 import { setViewmodel, updateAgentVisual, updateBacktrackGhosts, hitboxCenter, eyePos } from './agents.js';
-import { manualFire, aimbotFire, fireWeaponCommon, meleeAttack, moveAgent, computeBloom, startReload, finishReload, switchTo, selectBest, visibleTo, autoStopScale, recordTick, updateTickbase, beginSimFrame } from './combat.js';
+import { manualFire, aimbotFire, fireWeaponCommon, fireDoubleTap, meleeAttack, moveAgent, computeBloom, startReload, finishReload, switchTo, selectBest, visibleTo, autoStopScale, recordTick, updateTickbase, beginSimFrame } from './combat.js';
 import { botThink } from './ai.js';
 import {
   openBuy, closeBuy, beginBuyToLive, awardWin, endRoundAdvance, startRound, buildTeams,
@@ -202,7 +202,7 @@ function humanShoot(dt) {
     const wp8 = human.weapons.r8; if (!wp8) return; const c8 = human.cheats; const COCK = WEAPONS.r8.cockTime || 0.25;
     if (rmb) {
       human.r8Charge = 0;
-      if (human.fireCd <= 0) { if (wp8.ammo <= 0) { startReload(human); return; } human.fireMode = "fan"; sfxRevolverCock(); fireWeaponCommon(human); manualFire(human); updateHUDWeapons(); }   // fan: cock + fire each shot (spams the cock)
+      if (human.fireCd <= 0) { if (wp8.ammo <= 0) { startReload(human); return; } human.fireMode = "fan"; sfxRevolverCock(); fireWeaponCommon(human); manualFire(human); fireDoubleTap(human, () => manualFire(human)); updateHUDWeapons(); }   // fan: cock + fire each shot (spams the cock)
       return;
     }
     if (c8.aimbot.on && c8.aimbot.autoRevolver) {
@@ -234,7 +234,7 @@ function humanShoot(dt) {
     if (md) {
       human.r8Charge = Math.min(1, (human.r8Charge || 0) + dt / COCK);
       if (human.r8Charge >= 0.95 && !human.r8Cocked) { human.r8Cocked = true; sfxRevolverCock(); }
-      if (human.r8Charge >= 1 && human.fireCd <= 0) { if (wp8.ammo <= 0) { startReload(human); human.r8Charge = 0; human.r8Cocked = false; return; } human.fireMode = "primary"; fireWeaponCommon(human); manualFire(human); human.r8Charge = 0; human.r8Cocked = false; updateHUDWeapons(); }
+      if (human.r8Charge >= 1 && human.fireCd <= 0) { if (wp8.ammo <= 0) { startReload(human); human.r8Charge = 0; human.r8Cocked = false; return; } human.fireMode = "primary"; fireWeaponCommon(human); manualFire(human); fireDoubleTap(human, () => manualFire(human)); human.r8Charge = 0; human.r8Cocked = false; updateHUDWeapons(); }
     } else { human.r8Charge = Math.max(0, (human.r8Charge || 0) - dt / COCK * 2); human.r8Cocked = false; }
     return;
   }
@@ -251,6 +251,7 @@ function humanShoot(dt) {
     if (wp.ammo <= 0) { startReload(human); return; }
     human.fireMode = r8fan ? "fan" : "primary";
     fireWeaponCommon(human); manualFire(human);
+    fireDoubleTap(human, () => manualFire(human));      // double tap: the second round of the same server frame
     if (glockBurst) {
       human.burstQ = human.burstQ > 0 ? human.burstQ - 1 : 2;     // 3-round burst (this shot + 2 queued)
       human.fireCd = human.burstQ > 0 ? 0.07 : 0.4;               // rapid within the burst, then a gap before the next

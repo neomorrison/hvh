@@ -6,7 +6,7 @@ import * as THREE from 'three';
 import {
   WEAPONS, INACC, INACC_K, AIRBORNE_INACC, LAND_INACC, GRAVITY, JUMP_VEL,
   EYE_STAND, EYE_CROUCH, PLAYER_RADIUS, ECON, computeDamage, TEAM, BHOP_MAX,
-  TICK, MAX_BACKTRACK_TICKS, BT_SAMPLES, EXPOSE_TIME, SHIFT_MAX_TICKS, HIDE_SHOT_COST, SHIFT_REGEN,
+  TICK, MAX_BACKTRACK_TICKS, BT_SAMPLES, EXPOSE_TIME, SHIFT_MAX_TICKS, HIDE_SHOT_COST, SHIFT_REGEN, dtTicks,
 } from './data.js';
 import { WALLS, segAABB, rayAABB, penetrate, losClear, collideMove, MAP_BOUNDS, CT_SPAWNS, T_SPAWNS } from './world.js';
 import { meshBackend } from './sourcemap.js';
@@ -171,7 +171,12 @@ function sampleTrail(tgt, ticks) {
   for (let i = 0; i < BT_SAMPLES; i++) picked.push(out[Math.round(i * step)]);
   return picked;
 }
-export function backtrackTicks(a) { return Math.min(MAX_BACKTRACK_TICKS, Math.max(0, (a.cheats.tickbase && a.cheats.tickbase.backtrack) | 0)); }
+export function backtrackTicks(a) {
+  const cfg = Math.min(MAX_BACKTRACK_TICKS, Math.max(0, (a.cheats.tickbase && a.cheats.tickbase.backtrack) | 0));
+  // A tickbase shift that hasn't caught up yet has already spent the lag-compensation window: the
+  // server is running your commands off-clock, so there is nothing left to rewind a target with.
+  return Math.max(0, cfg - Math.ceil(a.shiftUsed || 0));
+}
 
 /* Rewinding only changes the answer if the target actually MOVED inside the window — against someone
    holding still every record is the same shot.  Pure arithmetic, so it's the cheap guard that keeps the
@@ -186,18 +191,51 @@ function trailMoved(tgt, ticks) {
   return false;
 }
 
-/* Firing normally PINS your real angles at whoever you're shooting — that is exactly why a desyncing
-   player's head becomes readable the moment they take a shot.  Hide shots spends banked shift ticks to
-   push the shot out while the fake angle is still up.  The bank refills at a fraction of real time
-   (SHIFT_REGEN), so taps can be hidden and a spray can't.  Returns true if the shot was hidden. */
+/* Decide which tick exploit (if any) this shot gets.  Exactly one, ever — see the note in data.js:
+   double tap shifts the tickbase forward, hide shots shifts it backward, and a shot can't be both.
+   Double tap takes priority when both are enabled, which is how real cheat menus resolve it, and it
+   means a doubled shot is an EXPOSED shot.  Returns "dt" | "hidden" | "exposed". */
 export function onShotFired(a) {
   const tb = a.cheats.tickbase || {}, aa = a.cheats.antiaim;
-  const canHide = !!(aa && aa.on && aa.desync && tb.hideShots);
-  if (canHide && (a.shiftCharge || 0) >= HIDE_SHOT_COST) { a.shiftCharge -= HIDE_SHOT_COST; a.hideFx = 0.25; return true; }
+  a._dtPending = false;
+  const dtc = dtTicks(a.cur, a.fireMode);
+  const wantsDT = !!(tb.doubleTap && dtc);
+  const wantsHide = !!(aa && aa.on && aa.desync && tb.hideShots);
+  // a shift still in flight means the tickbase is already off-clock — no second trick until it lands
+  if ((a.shiftUsed || 0) <= 0) {
+    if (wantsDT && (a.shiftCharge || 0) >= dtc) {
+      a.shiftCharge -= dtc; a.shiftUsed = dtc; a.shiftMode = "dt"; a._dtPending = true;
+      expose(a);                                    // forward-shifted: the fake angle can't cover this one
+      if (a.isHuman) addHitLog("double tap ×2", "hs");
+      return "dt";
+    }
+    if (wantsHide && (a.shiftCharge || 0) >= HIDE_SHOT_COST) {
+      a.shiftCharge -= HIDE_SHOT_COST; a.shiftUsed = HIDE_SHOT_COST; a.shiftMode = "hide"; a.hideFx = 0.25;
+      return "hidden";
+    }
+  }
+  expose(a);
+  if (a.isHuman && (wantsHide || wantsDT)) addHitLog("no shift ticks — shot exposed", "inacc");
+  return "exposed";
+}
+function expose(a) {
   a.exposeT = EXPOSE_TIME;
   a.desyncSide = -(a.desyncSide || 1);          // and don't come back on the SAME side afterwards
-  if (a.isHuman && canHide) addHitLog("shot exposed — no shift ticks", "inacc");
-  return false;
+}
+
+/* The second bullet of a double tap.  Both rounds are processed in the SAME server frame, so there is
+   no recovery between them: the second one eats the first one's bloom and re-rolls independently.
+   `resolve` is the caller's shot resolution (aimbot solution or manual raycast). */
+export function fireDoubleTap(a, resolve) {
+  if (!a._dtPending) return false;
+  a._dtPending = false;
+  const wp = a.weapons[a.cur];
+  if (!wp || (wp.ammo || 0) <= 0) return false;
+  wp.ammo--;
+  const I = INACC[a.cur]; if (I) a.firePenalty = Math.min(I.max, (a.firePenalty || 0) + I.fire);
+  sfxFire(a);
+  resolve();
+  return true;
 }
 
 /* Per-step tickbase bookkeeping: bleed the exposure window, refill the shift bank, and keep the desync
@@ -206,6 +244,8 @@ export function onShotFired(a) {
 export function updateTickbase(a, dt) {
   if (a.exposeT > 0) a.exposeT -= dt;
   if (a.hideFx > 0) a.hideFx -= dt;
+  // the server catches up on an off-clock tickbase at real time, one tick per tick
+  if (a.shiftUsed > 0) { a.shiftUsed = Math.max(0, a.shiftUsed - dt / TICK); if (a.shiftUsed === 0) a.shiftMode = null; }
   a.shiftCharge = Math.min(SHIFT_MAX_TICKS, (a.shiftCharge || 0) + (dt / TICK) * SHIFT_REGEN);
   const aa = a.cheats.antiaim;
   if (!aa || !aa.on || !aa.desync) return;
@@ -480,33 +520,41 @@ export function aimbotFire(a) {
   if (a.fireCd > 0) return false;
   if ((a.weapons[a.cur].ammo || 0) <= 0) { startReload(a); return false; }
   const dist = me.distanceTo(cs.aimPoint);
-  fireWeaponCommon(a);
-  // RESOLVER vs a desyncing enemy: an un-resolved shot whiffs to the FAKE (rendered) side. Resolver OFF →
-  // the desync always beats you; resolver ON resolves with probability cb.resolver.accuracy (so it can
-  // still be baited). Non-desyncing targets are unaffected (cs.tgt._desyncOff is null).
-  if (cs.tgt._desyncOff) {
-    const rp = cb.resolver.on ? (cb.resolver.accuracy != null ? cb.resolver.accuracy : 0.7) : 0;
-    if (Math.random() >= rp) {
-      const fake = cs.aimPoint.clone().add(cs.tgt._desyncOff);
-      addTracer(me.clone().add(fake.clone().sub(me).normalize().multiplyScalar(40)), fake); addImpact(fake);
-      if (a.isHuman) addHitLog("desync beat the resolver", "inacc");
-      return true;
+  // One bullet against the solution canShoot() picked. Called twice for a double tap — both rounds go
+  // out in the same server frame, so the second re-rolls the resolver and the hit against the bloom the
+  // first one just added (hence the fresh computeAccuracy rather than the captured cs.hitChance).
+  const resolve = () => {
+    if (!cs.tgt.alive) { addTracer(me.clone().add(dirTo.clone().multiplyScalar(40)), cs.aimPoint); addImpact(cs.aimPoint); return; }
+    // RESOLVER vs a desyncing enemy: an un-resolved shot whiffs to the FAKE (rendered) side. Resolver OFF →
+    // the desync always beats you; resolver ON resolves with probability cb.resolver.accuracy (so it can
+    // still be baited). Non-desyncing targets are unaffected (cs.tgt._desyncOff is null).
+    if (cs.tgt._desyncOff) {
+      const rp = cb.resolver.on ? (cb.resolver.accuracy != null ? cb.resolver.accuracy : 0.7) : 0;
+      if (Math.random() >= rp) {
+        const fake = cs.aimPoint.clone().add(cs.tgt._desyncOff);
+        addTracer(me.clone().add(fake.clone().sub(me).normalize().multiplyScalar(40)), fake); addImpact(fake);
+        if (a.isHuman) addHitLog("desync beat the resolver", "inacc");
+        return;
+      }
     }
-  }
-  addTracer(me.clone().add(dirTo.clone().multiplyScalar(40)), cs.aimPoint);
-  if (cs.rec) cs.tgt._btMark = { pos: cs.rec.pos, crouch: cs.rec.crouch, life: 0.7 };   // the record we rewound to (drawn by the backtrack ghost visual)
-  if (meshBackend.active) { const brk = meshBackend.breakWindowsAlong(me.x, me.y, me.z, dirTo.x, dirTo.y, dirTo.z, dist + 60); if (brk && brk.center) sfxImpact(brk.center, true); }   // shatter glass in the line of fire
-  // Everyone lands at pure bloom accuracy. Bots used to have their roll capped by a persona "skill"
-  // number on top of the accuracy they'd already earned, which made the player's identical cheat
-  // strictly better than theirs — the 1-v-10 problem. Same maths for every agent now; a persona's
-  // edge is its min hit chance, min damage, backtrack depth and resolver, not a secret handicap.
-  if (Math.random() < cs.hitChance) {
-    applyHit(a, cs.tgt, cs.group, dist, cs.through);
-    if (a.isHuman && cs.btTicks > 0) addHitLog(`backtracked ${cs.btTicks} tick${cs.btTicks > 1 ? 's' : ''}`, "hs");
-  } else {
-    if (a.isHuman) addHitLog("missed — inaccuracy", "inacc");
-    addImpact(cs.aimPoint.clone().add(new THREE.Vector3((Math.random() - 0.5) * 40, (Math.random() - 0.5) * 40, (Math.random() - 0.5) * 40)));
-  }
+    addTracer(me.clone().add(dirTo.clone().multiplyScalar(40)), cs.aimPoint);
+    if (cs.rec) cs.tgt._btMark = { pos: cs.rec.pos, crouch: cs.rec.crouch, life: 0.7 };   // the record we rewound to (drawn by the backtrack ghost visual)
+    if (meshBackend.active) { const brk = meshBackend.breakWindowsAlong(me.x, me.y, me.z, dirTo.x, dirTo.y, dirTo.z, dist + 60); if (brk && brk.center) sfxImpact(brk.center, true); }   // shatter glass in the line of fire
+    // Everyone lands at pure bloom accuracy. Bots used to have their roll capped by a persona "skill"
+    // number on top of the accuracy they'd already earned, which made the player's identical cheat
+    // strictly better than theirs — the 1-v-10 problem. Same maths for every agent now; a persona's
+    // edge is its min hit chance, min damage, backtrack depth and resolver, not a secret handicap.
+    if (Math.random() < computeAccuracy(a, cs.aimPoint, cs.tgt, cs.group)) {
+      applyHit(a, cs.tgt, cs.group, dist, cs.through);
+      if (a.isHuman && cs.btTicks > 0) addHitLog(`backtracked ${cs.btTicks} tick${cs.btTicks > 1 ? 's' : ''}`, "hs");
+    } else {
+      if (a.isHuman) addHitLog("missed — inaccuracy", "inacc");
+      addImpact(cs.aimPoint.clone().add(new THREE.Vector3((Math.random() - 0.5) * 40, (Math.random() - 0.5) * 40, (Math.random() - 0.5) * 40)));
+    }
+  };
+  fireWeaponCommon(a);          // arms _dtPending if this shot won a forward shift
+  resolve();
+  fireDoubleTap(a, resolve);
   return true;
 }
 

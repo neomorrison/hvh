@@ -83,7 +83,32 @@ export const BT_SAMPLES = 5;                   // records actually evaluated per
    the shot goes out while the fake angle is still up — but the bank only refills at a fraction of real
    time, so you can hide taps, never a spray. */
 export const EXPOSE_TIME = 0.18;               // seconds a normal (un-hidden) shot exposes your real angles
-export const SHIFT_MAX_TICKS = 16, HIDE_SHOT_COST = 8, SHIFT_REGEN = 0.25;   // bank cap, cost per hidden shot, ticks banked per real tick
+export const SHIFT_MAX_TICKS = 16, HIDE_SHOT_COST = 8, SHIFT_REGEN = 0.25;   // bank cap (= sv_maxusrcmdprocessticks), cost per hidden shot, ticks banked per real tick
+
+/* ---- how the three tick exploits actually relate ----
+   All three spend the SAME resource: the server will only process a bounded burst of user commands
+   (sv_maxusrcmdprocessticks, 16), and lag compensation will only rewind a bounded window (sv_maxunlag).
+     · DOUBLE TAP shifts your tickbase FORWARD past the weapon's next-attack check, so two commands
+       both pass it and two bullets land in one server frame.  It costs as many banked ticks as the
+       weapon's fire cycle is long, which is why bolt-actions (SSG: 80 ticks) simply can't be doubled.
+     · HIDE SHOTS shifts the tickbase BACKWARD so the shot is processed on a tick where your fake angle
+       was still up.  Opposite direction — a shot cannot be shifted both ways, so you get one or the
+       other per shot, never both.  Every cheat menu resolves this the same way: double tap wins, and
+       a doubled shot therefore exposes you.
+     · BACKTRACK spends the rewind window.  While a shift is still in flight the server is running your
+       commands off-clock, so there is no window left — backtrack is suppressed until it catches up. */
+export function weaponCycle(key, fireMode) {
+  const w = WEAPONS[key]; if (!w || w.melee) return 0;
+  if (key === "r8") return fireMode === "fan" ? (w.cycleFan || 0.30) : (w.cyclePrimary || 0.25);
+  return w.rpm ? 60 / w.rpm : 0;
+}
+/* Ticks of forward shift needed to double-tap this weapon, or 0 if it can't be doubled.
+   duals 10 · usp/glock 13 · deagle 15 · scar/g3/r8 16 · ssg 80 (over budget) · knife n/a */
+export function dtTicks(key, fireMode) {
+  const c = weaponCycle(key, fireMode); if (!c) return 0;
+  const t = Math.ceil(c / TICK);
+  return t <= SHIFT_MAX_TICKS ? t : 0;
+}
 
 // bullet penetration (autowall): weapon penPct doubles as penetration power.
 export const PEN = {

@@ -1,7 +1,7 @@
 /* ============================== [CHEAT] ==============================
    The player cheat menu (press I) and its localStorage/cookie config.      */
 import { renderer } from './core.js';
-import { MAX_BACKTRACK_TICKS, TICK_RATE } from './data.js';
+import { MAX_BACKTRACK_TICKS, TICK_RATE, SHIFT_MAX_TICKS } from './data.js';
 import { refs, GAME } from './state.js';
 import { defaultCheats } from './agents.js';
 import { showHint, updateHUDWeapons } from './hud.js';
@@ -43,9 +43,15 @@ export function buildCheatMenu() {
       sel("Mode", "aaMode", ["at_target", "freestanding"], () => c.antiaim.mode, v => c.antiaim.mode = v),
       sw("Fake duck", () => c.antiaim.fakeduck, v => c.antiaim.fakeduck = v),
     ] },
-    { title: "⏱ Tickbase / Backtrack", rows: [
+    { title: "⏱ Tickbase (backtrack · hide shots · double tap)", rows: [
       rng("Backtrack (ticks)", 0, MAX_BACKTRACK_TICKS, () => c.tickbase.backtrack, v => c.tickbase.backtrack = v, t => `${t} tk · ${Math.round(t * 1000 / TICK_RATE)}ms`),
       sw("Hide shots (fire without pinning your real angle)", () => c.tickbase.hideShots, v => c.tickbase.hideShots = v),
+      sw("Double tap (two rounds in one server frame)", () => c.tickbase.doubleTap, v => c.tickbase.doubleTap = v),
+      note(`All three spend the same ${SHIFT_MAX_TICKS}-tick command budget, and a shot can only be shifted one way — ` +
+           `double tap shifts forward, hide shots shifts back, so you get one or the other per shot and <b>double tap wins</b> ` +
+           `(a doubled shot is an exposed shot). While a shift is still catching up, backtrack is suppressed. ` +
+           `Double tap costs a weapon's whole fire cycle in ticks: Duals 10 · USP/Glock 13 · Deagle 15 · SCAR/G3/R8 16 — ` +
+           `the SSG's bolt is 80, far over budget, so it can't be doubled at all.`),
     ] },
     { title: "👁 Visuals (Wallhack / ESP)", rows: [
       sw("ESP enabled", () => c.visuals.esp, v => c.visuals.esp = v, "F7"),
@@ -58,7 +64,7 @@ export function buildCheatMenu() {
       col("Chams: visible color", () => c.visuals.chamsVisible, v => c.visuals.chamsVisible = v),
       col("Chams: occluded color", () => c.visuals.chamsOccluded, v => c.visuals.chamsOccluded = v),
       sw("Desync ghost model (local)", () => c.visuals.desyncGhost, v => c.visuals.desyncGhost = v),
-      sw("Backtrack trail (your own rewindable hitboxes)", () => c.visuals.backtrackTrail, v => c.visuals.backtrackTrail = v),
+      sw("Backtrack trail (furthest tick you can be rewound to)", () => c.visuals.backtrackTrail, v => c.visuals.backtrackTrail = v),
       sw("Backtrack ghost (the tick a rewound shot landed on)", () => c.visuals.backtrackGhost, v => c.visuals.backtrackGhost = v),
     ] },
   ];
@@ -90,6 +96,7 @@ function rng(label, min, max, get, set, fmt) {
   const r = row.querySelector("input"), v = row.querySelector(".cval");
   r.oninput = () => { set(+r.value); v.textContent = show(+r.value); }; row._sync = () => { r.value = get(); v.textContent = show(get()); }; return row;
 }
+function note(html) { const row = document.createElement("div"); row.className = "cnote"; row.innerHTML = html; return row; }
 function col(label, get, set) {
   const row = document.createElement("div"); row.className = "crow";
   row.innerHTML = `<label>${label}</label><input type="color" value="${get()}">`;
