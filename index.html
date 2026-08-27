@@ -42,13 +42,15 @@
   .tb-team.ct .tb-alive { color:#7db9ff; } .tb-team.t .tb-alive { color:#ffce6b; }
   .you { color:#ffe9a8; font-weight:bold; }
 
-  /* hide-shots (tickbase) bank */
+  /* tickbase readout: shared command budget + which exploit is armed (DT outranks HS; a shift in flight kills BT) */
   #tickStat { display:none; margin-top:5px; font-size:11px; color:#cfd6e2; }
   #tickStat .tk-l { color:#6a7585; letter-spacing:1px; }
-  #tickStat .tk-v { color:#4dff6a; font-weight:bold; font-size:13px; }
-  #tickStat .tk-v.out { color:#ff6464; }
+  #tickStat .tk-n { color:#8b94a3; margin:0 2px 0 5px; font-variant-numeric:tabular-nums; }
   #tickStat .tk-bar { display:inline-block; width:52px; height:4px; background:#2a3340; border-radius:2px; overflow:hidden; margin-left:5px; vertical-align:middle; }
   #tickStat .tk-bar > span { display:block; height:100%; background:#4dff6a; }
+  #tickStat .tk-b { display:inline-block; margin-left:4px; padding:0 4px; border-radius:3px; font-size:9px; font-weight:bold; letter-spacing:.5px;
+    background:#1c232e; color:#4a5361; border:1px solid #2a3340; }
+  #tickStat .tk-b.on { background:#16241a; color:#4dff6a; border-color:#2f6b3c; }
 
   #bottomleft { position:absolute; left:18px; bottom:16px; }
   #hp-armor { display:flex; align-items:flex-end; gap:18px; }
@@ -141,6 +143,8 @@
   .switch input:checked+.slider{background:#ff4d6d;}
   .switch input:checked+.slider:before{transform:translateX(18px);}
   .cval{font-size:11px;color:#8b94a3;width:34px;text-align:right;}
+  .cnote{font-size:11px;color:#8b94a3;line-height:1.55;background:#141922;border-left:2px solid #ffd86b;border-radius:0 4px 4px 0;padding:6px 9px;}
+  .cnote b{color:#ffd86b;}
   .cval.wide{width:86px;}
 
   /* scoreboard */

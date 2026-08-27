@@ -4,7 +4,7 @@
    tiny WebAudio SFX.  Also the small message/marker helpers everyone uses.  */
 import * as THREE from 'three';
 import { camera } from './core.js';
-import { WEAPONS, NADES, TEAM, SHIFT_MAX_TICKS, HIDE_SHOT_COST } from './data.js';
+import { WEAPONS, NADES, TEAM, SHIFT_MAX_TICKS, HIDE_SHOT_COST, dtTicks } from './data.js';
 import { WALLS, RESCUE_ZONES, MAP_BOUNDS, losClear } from './world.js';
 import { hitboxCenter, eyePos } from './agents.js';
 import { agents, refs, GAME, vm } from './state.js';
@@ -47,14 +47,24 @@ export function updatePlayerHUD() {
   $("#hpStat").querySelector(".val").textContent = Math.max(0, Math.ceil(human.hp));
   $("#armorStat").querySelector(".val").textContent = Math.max(0, Math.ceil(human.armor)) + (human.helmet ? " ⛑" : "");
   $("#money").textContent = "$" + human.money;
-  // hide-shots bank: how many shots you can still fire without your real angle being pinned
+  // Tickbase readout: the shared command budget plus which exploit is actually armed right now. The
+  // badges light one at a time on purpose — that IS the rule (double tap outranks hide shots, and a
+  // shift still in flight suppresses backtrack), and it's easier to read than to explain.
   const tb = human.cheats.tickbase || {}, el = $("#tickStat");
-  if (tb.hideShots) {
-    const banked = Math.floor((human.shiftCharge || 0) / HIDE_SHOT_COST);
-    el.style.display = "block";
-    el.innerHTML = `<span class="tk-l">HIDE</span> <span class="tk-v${banked ? '' : ' out'}">${banked}</span>` +
-      `<span class="tk-bar"><span style="width:${Math.round(100 * Math.min(1, (human.shiftCharge || 0) / SHIFT_MAX_TICKS))}%"></span></span>`;
-  } else el.style.display = "none";
+  if (!tb.hideShots && !tb.doubleTap && !(tb.backtrack > 0)) { el.style.display = "none"; return; }
+  const bank = human.shiftCharge || 0, inFlight = (human.shiftUsed || 0) > 0;
+  const dtc = dtTicks(human.cur, human.fireMode);
+  const dtReady = !!tb.doubleTap && dtc > 0 && bank >= dtc && !inFlight;
+  const hsReady = !!tb.hideShots && bank >= HIDE_SHOT_COST && !inFlight && !dtReady;
+  const btReady = tb.backtrack > 0 && !inFlight;
+  const badge = (on, ready, txt, tip) => on ? `<span class="tk-b${ready ? " on" : ""}" title="${tip}">${txt}</span>` : "";
+  el.style.display = "block";
+  el.innerHTML = `<span class="tk-l">TICKBASE</span>` +
+    `<span class="tk-bar"><span style="width:${Math.round(100 * Math.min(1, bank / SHIFT_MAX_TICKS))}%"></span></span>` +
+    `<span class="tk-n">${Math.floor(bank)}/${SHIFT_MAX_TICKS}</span>` +
+    badge(!!tb.doubleTap, dtReady, "DT", dtc ? `double tap — ${dtc} ticks` : `${WEAPONS[human.cur] ? WEAPONS[human.cur].name : "this weapon"} can't be double tapped`) +
+    badge(!!tb.hideShots, hsReady, "HS", dtReady ? "outranked by double tap this shot" : `hide shots — ${HIDE_SHOT_COST} ticks`) +
+    badge(tb.backtrack > 0, btReady, "BT", inFlight ? "suppressed — tickbase shift in flight" : `${tb.backtrack} ticks`);
 }
 export function updateHUDWeapons() {
   const human = refs.human; if (!human || !human.cur) return;

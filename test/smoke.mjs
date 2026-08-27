@@ -100,16 +100,51 @@ try {
       if (bot.trail.length > data.MAX_BACKTRACK_TICKS) { failures++; log('✗ backtrack history exceeded the tick window'); }
       if (!(combat.backtrackTicks(bot) > 0)) { failures++; log('✗ bots should carry a backtrack config of their own'); }
       log('  backtrack: window', data.MAX_BACKTRACK_TICKS, 'ticks @', data.TICK_RATE, '=', Math.round(1000 / data.TICK_RATE * data.MAX_BACKTRACK_TICKS) + 'ms · sample bot holds', bot.trail.length, 'records');
-      // an unhidden shot exposes the real angles; hide shots spends the shift bank instead
-      bot.cheats.antiaim.on = true; bot.cheats.antiaim.desync = true;
-      bot.cheats.tickbase.hideShots = false; bot.exposeT = 0; bot.shiftCharge = data.SHIFT_MAX_TICKS;
-      combat.onShotFired(bot);
-      if (!(bot.exposeT > 0)) { failures++; log('✗ an unhidden shot must expose the shooter'); }
-      bot.cheats.tickbase.hideShots = true; bot.exposeT = 0; bot.shiftCharge = data.SHIFT_MAX_TICKS;
-      const hid = combat.onShotFired(bot);
-      if (!(hid && bot.exposeT === 0 && bot.shiftCharge === data.SHIFT_MAX_TICKS - data.HIDE_SHOT_COST)) { failures++; log('✗ hide shots should suppress the exposure and spend shift ticks'); }
-      bot.shiftCharge = 0; bot.exposeT = 0;
-      if (combat.onShotFired(bot) !== false || !(bot.exposeT > 0)) { failures++; log('✗ an empty shift bank must not be able to hide a shot'); }
+      // --- which weapons can be double tapped falls out of cycle-vs-command-budget, not a hand-list ---
+      const dtWant = { duals: 10, usp: 13, glock: 13, deagle: 15, scar: 16, g3: 16, r8: 16, ssg: 0, knife: 0 };
+      for (const k in dtWant) {
+        const got = data.dtTicks(k);
+        if (got !== dtWant[k]) { failures++; log(`✗ dtTicks(${k}) = ${got}, expected ${dtWant[k]}`); }
+      }
+      if (data.dtTicks('r8', 'fan') !== 0) { failures++; log("✗ the R8 fan cycle is over budget — it must not be double tappable"); }
+      log('  double tap cost: duals 10 · usp/glock 13 · deagle 15 · scar/g3/r8 16 ticks · ssg over budget (bolt)');
+
+      const reset = (hide, dt, wep) => { bot.cur = wep || 'deagle'; bot.fireMode = 'primary'; bot.weapons[bot.cur] = { ammo: 8, reserve: 8 };
+        bot.cheats.antiaim.on = true; bot.cheats.antiaim.desync = true; bot.cheats.tickbase.hideShots = hide; bot.cheats.tickbase.doubleTap = dt;
+        bot.exposeT = 0; bot.shiftUsed = 0; bot.shiftMode = null; bot._dtPending = false; bot.shiftCharge = data.SHIFT_MAX_TICKS; };
+
+      reset(false, false);
+      if (combat.onShotFired(bot) !== 'exposed' || !(bot.exposeT > 0)) { failures++; log('✗ an unhidden shot must expose the shooter'); }
+
+      reset(true, false);
+      if (combat.onShotFired(bot) !== 'hidden' || bot.exposeT !== 0 || bot.shiftCharge !== data.SHIFT_MAX_TICKS - data.HIDE_SHOT_COST) { failures++; log('✗ hide shots should suppress the exposure and spend shift ticks'); }
+
+      reset(true, false); bot.shiftCharge = 1;
+      if (combat.onShotFired(bot) !== 'exposed' || !(bot.exposeT > 0)) { failures++; log('✗ an empty shift bank must not be able to hide a shot'); }
+
+      // --- the exclusion rule: one shift per shot, double tap outranks hide shots ---
+      reset(true, true);                                   // BOTH enabled on a deagle (15 ticks)
+      const mode = combat.onShotFired(bot);
+      if (mode !== 'dt') { failures++; log(`✗ double tap must win when both are enabled (got ${mode})`); }
+      if (!(bot.exposeT > 0)) { failures++; log('✗ a double-tapped shot cannot also be hidden — it must expose'); }
+      if (bot.shiftCharge !== data.SHIFT_MAX_TICKS - 15 || bot.shiftUsed !== 15) { failures++; log('✗ double tap should spend the deagle cycle (15 ticks) and leave that shift in flight'); }
+      if (!bot._dtPending) { failures++; log('✗ double tap should arm a second round'); }
+      // a shift still in flight suppresses backtrack outright
+      bot.cheats.tickbase.backtrack = data.MAX_BACKTRACK_TICKS;
+      if (combat.backtrackTicks(bot) !== Math.max(0, data.MAX_BACKTRACK_TICKS - 15)) { failures++; log('✗ an in-flight tickbase shift must eat the backtrack window'); }
+      // ...and no second exploit until it lands
+      if (combat.onShotFired(bot) !== 'exposed') { failures++; log('✗ no second tick exploit while a shift is still in flight'); }
+      // the second round is real ammo
+      reset(false, true); combat.onShotFired(bot);
+      const ammoBefore = bot.weapons[bot.cur].ammo;
+      let fired2 = 0;
+      if (!combat.fireDoubleTap(bot, () => fired2++)) { failures++; log('✗ fireDoubleTap should fire the armed second round'); }
+      if (fired2 !== 1 || bot.weapons[bot.cur].ammo !== ammoBefore - 1) { failures++; log('✗ the second round should cost a bullet and resolve once'); }
+      if (combat.fireDoubleTap(bot, () => fired2++)) { failures++; log('✗ double tap must not repeat without a fresh shift'); }
+      // a bolt-action can never double tap however full the bank is
+      reset(false, true, 'ssg');
+      if (combat.onShotFired(bot) !== 'exposed' || bot._dtPending) { failures++; log('✗ the SSG bolt cycle is over budget — it must not double tap'); }
+      bot.cheats.tickbase.doubleTap = false; bot.cheats.tickbase.hideShots = false; bot.shiftUsed = 0;
     }
   }
 

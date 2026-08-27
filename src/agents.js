@@ -115,7 +115,9 @@ export function defaultCheats(aggressive) {
     autowall: { on: aggressive, minDmg: 30 },
     resolver: { on: aggressive, accuracy: 0.7, mode: "animation" },   // accuracy = internal resolve PROBABILITY (no UI slider; bots overridden by persona.res)
     antiaim: { on: aggressive, yaw: "jitter", jitter: 55, pitch: "down", desync: true, desyncAngle: 58, mode: "at_target", fakeduck: false },
-    tickbase: { backtrack: aggressive ? 12 : 0, hideShots: aggressive },   // backtrack is in TICKS (12 tk @64 = 187ms)
+    // backtrack is in TICKS (12 tk @64 = 187ms). doubleTap and hideShots shift the tickbase in opposite
+    // directions, so only one can apply to a given shot — double tap wins when both are on.
+    tickbase: { backtrack: aggressive ? 12 : 0, hideShots: aggressive, doubleTap: false },
     visuals: { esp: false, boxes: true, health: true, name: true, distance: false, snaplines: false, chams: false, desyncGhost: false, backtrackTrail: false, backtrackGhost: false, chamsVisible: '#ff2a44', chamsOccluded: '#7a4cff' },
   };
 }
@@ -125,30 +127,30 @@ export function defaultCheats(aggressive) {
    real bloom accuracy; a bot's edge is when it chooses to pull the trigger, how much damage it insists
    on, how many ticks it rewinds, and whether it hides its shots.  Values cluster around 40% / 30 dmg. */
 export const BOT_PERSONAS = [
-  { name: "lucky", style: "rage", aim: { priority: "head", hitchance: 38, minDmg: 35, forceBody: false }, res: 0.92, bt: 14, hide: true, aa: { yaw: "jitter", pitch: "down", desyncAngle: 58 }, wepBias: "deagle" },
-  { name: "vapor", style: "peek", aim: { priority: "head", hitchance: 44, minDmg: 30, forceBody: false }, res: 0.8, bt: 12, hide: true, aa: { yaw: "sideways", pitch: "down", desyncAngle: 52 }, wepBias: "ssg" },
-  { name: "ghoul", style: "rage", aim: { priority: "stomach", hitchance: 34, minDmg: 28, forceBody: true }, res: 0.7, bt: 16, hide: false, aa: { yaw: "jitter", pitch: "down", desyncAngle: 58 }, wepBias: "scar" },
-  { name: "nyx", style: "passive", aim: { priority: "head", hitchance: 52, minDmg: 34, forceBody: false }, res: 0.85, bt: 10, hide: true, aa: { yaw: "spin", pitch: "down", desyncAngle: 58 }, wepBias: "ssg" },
-  { name: "hex", style: "peek", aim: { priority: "head", hitchance: 42, minDmg: 30, forceBody: false }, res: 0.78, bt: 12, hide: false, aa: { yaw: "back", pitch: "up", desyncAngle: 48 }, wepBias: "r8" },
-  { name: "prism", style: "rage", aim: { priority: "stomach", hitchance: 33, minDmg: 26, forceBody: true }, res: 0.74, bt: 14, hide: false, aa: { yaw: "jitter", pitch: "zero", desyncAngle: 55 }, wepBias: "duals" },
-  { name: "wraith", style: "passive", aim: { priority: "head", hitchance: 50, minDmg: 38, forceBody: false }, res: 0.9, bt: 8, hide: true, aa: { yaw: "sideways", pitch: "down", desyncAngle: 58 }, wepBias: "g3" },
-  { name: "jolt", style: "rush", aim: { priority: "head", hitchance: 30, minDmg: 25, forceBody: false }, res: 0.68, bt: 16, hide: false, aa: { yaw: "jitter", pitch: "down", desyncAngle: 50 }, wepBias: "deagle" },
-  { name: "cinder", style: "peek", aim: { priority: "head", hitchance: 41, minDmg: 30, forceBody: false }, res: 0.82, bt: 13, hide: true, aa: { yaw: "jitter", pitch: "down", desyncAngle: 56 }, wepBias: "deagle" },
-  { name: "onyx", style: "rage", aim: { priority: "stomach", hitchance: 36, minDmg: 32, forceBody: true }, res: 0.8, bt: 15, hide: true, aa: { yaw: "spin", pitch: "down", desyncAngle: 58 }, wepBias: "scar" },
-  { name: "dezync", style: "passive", aim: { priority: "head", hitchance: 55, minDmg: 40, forceBody: false }, res: 0.94, bt: 6, hide: true, aa: { yaw: "sideways", pitch: "zero", desyncAngle: 58 }, wepBias: "ssg" },
-  { name: "mirage", style: "rush", aim: { priority: "head", hitchance: 32, minDmg: 26, forceBody: false }, res: 0.72, bt: 16, hide: false, aa: { yaw: "jitter", pitch: "down", desyncAngle: 54 }, wepBias: "r8" },
+  { name: "lucky", style: "rage", aim: { priority: "head", hitchance: 38, minDmg: 35, forceBody: false }, res: 0.92, bt: 14, hide: true, dt: false, aa: { yaw: "jitter", pitch: "down", desyncAngle: 58 }, wepBias: "deagle" },
+  { name: "vapor", style: "peek", aim: { priority: "head", hitchance: 44, minDmg: 30, forceBody: false }, res: 0.8, bt: 12, hide: false, dt: true, aa: { yaw: "sideways", pitch: "down", desyncAngle: 52 }, wepBias: "ssg" },
+  { name: "ghoul", style: "rage", aim: { priority: "stomach", hitchance: 34, minDmg: 28, forceBody: true }, res: 0.7, bt: 16, hide: false, dt: true, aa: { yaw: "jitter", pitch: "down", desyncAngle: 58 }, wepBias: "scar" },
+  { name: "nyx", style: "passive", aim: { priority: "head", hitchance: 52, minDmg: 34, forceBody: false }, res: 0.85, bt: 10, hide: true, dt: false, aa: { yaw: "spin", pitch: "down", desyncAngle: 58 }, wepBias: "ssg" },
+  { name: "hex", style: "peek", aim: { priority: "head", hitchance: 42, minDmg: 30, forceBody: false }, res: 0.78, bt: 12, hide: false, dt: true, aa: { yaw: "back", pitch: "up", desyncAngle: 48 }, wepBias: "r8" },
+  { name: "prism", style: "rage", aim: { priority: "stomach", hitchance: 33, minDmg: 26, forceBody: true }, res: 0.74, bt: 14, hide: false, dt: true, aa: { yaw: "jitter", pitch: "zero", desyncAngle: 55 }, wepBias: "duals" },
+  { name: "wraith", style: "passive", aim: { priority: "head", hitchance: 50, minDmg: 38, forceBody: false }, res: 0.9, bt: 8, hide: true, dt: false, aa: { yaw: "sideways", pitch: "down", desyncAngle: 58 }, wepBias: "g3" },
+  { name: "jolt", style: "rush", aim: { priority: "head", hitchance: 30, minDmg: 25, forceBody: false }, res: 0.68, bt: 16, hide: false, dt: true, aa: { yaw: "jitter", pitch: "down", desyncAngle: 50 }, wepBias: "deagle" },
+  { name: "cinder", style: "peek", aim: { priority: "head", hitchance: 41, minDmg: 30, forceBody: false }, res: 0.82, bt: 13, hide: true, dt: false, aa: { yaw: "jitter", pitch: "down", desyncAngle: 56 }, wepBias: "deagle" },
+  { name: "onyx", style: "rage", aim: { priority: "stomach", hitchance: 36, minDmg: 32, forceBody: true }, res: 0.8, bt: 15, hide: false, dt: true, aa: { yaw: "spin", pitch: "down", desyncAngle: 58 }, wepBias: "scar" },
+  { name: "dezync", style: "passive", aim: { priority: "head", hitchance: 55, minDmg: 40, forceBody: false }, res: 0.94, bt: 6, hide: true, dt: false, aa: { yaw: "sideways", pitch: "zero", desyncAngle: 58 }, wepBias: "ssg" },
+  { name: "mirage", style: "rush", aim: { priority: "head", hitchance: 32, minDmg: 26, forceBody: false }, res: 0.72, bt: 16, hide: false, dt: true, aa: { yaw: "jitter", pitch: "down", desyncAngle: 54 }, wepBias: "r8" },
 ];
 // extra personas so a full 12v12 (23 bots) gets distinct names + varied behaviour
 const _EXTRA_NAMES = ["zephyr", "quartz", "blaze", "specter", "vortex", "raven", "cobalt", "phantom", "glitch", "static", "ember", "fang", "drift", "havoc", "pulse", "rogue"];
 const _STYLES = ["rage", "peek", "passive", "rush"], _YAWS = ["jitter", "sideways", "spin", "back"], _PITCHES = ["down", "down", "up", "zero"], _BIASES = ["deagle", "ssg", "scar", "g3", "r8", "duals"];
 for (let i = 0; i < _EXTRA_NAMES.length; i++) {
-  const head = Math.random() < 0.7;
+  const head = Math.random() < 0.7, hidesShots = Math.random() < 0.5;
   BOT_PERSONAS.push({
     name: _EXTRA_NAMES[i], style: _STYLES[i % _STYLES.length],
     aim: { priority: head ? "head" : "stomach", hitchance: 30 + Math.floor(Math.random() * 24), minDmg: 25 + Math.floor(Math.random() * 14), forceBody: !head },
     res: 0.68 + Math.random() * 0.26,
     bt: 6 + Math.floor(Math.random() * (MAX_BACKTRACK_TICKS - 5)),
-    hide: Math.random() < 0.55,
+    hide: hidesShots, dt: !hidesShots,          // one tick style each — they can't both apply to a shot
     aa: { yaw: _YAWS[i % _YAWS.length], pitch: _PITCHES[i % _PITCHES.length], desyncAngle: 48 + Math.floor(Math.random() * 11) },
     wepBias: _BIASES[i % _BIASES.length],
   });
@@ -161,7 +163,7 @@ export function applyPersona(a, p) {
   c.resolver.accuracy = p.res;
   c.antiaim.yaw = p.aa.yaw; c.antiaim.pitch = p.aa.pitch; c.antiaim.desyncAngle = p.aa.desyncAngle;
   c.tickbase.backtrack = Math.min(MAX_BACKTRACK_TICKS, p.bt != null ? p.bt : 12);   // bots rewind the player exactly like the player rewinds them
-  c.tickbase.hideShots = !!p.hide;
+  c.tickbase.hideShots = !!p.hide; c.tickbase.doubleTap = !!p.dt;
 }
 
 export function spawnAgent(team, isHuman, name) {
@@ -184,7 +186,7 @@ export function spawnAgent(team, isHuman, name) {
     carrying: null, flashT: 0, lastDamageFrom: null, hitFlash: 0,
     landBloom: 0, onGround: true,
     trail: [], _tick: 0, _recAcc: 0,                 // lag-compensation history (see recordTick)
-    exposeT: 0, shiftCharge: SHIFT_MAX_TICKS, _btMark: null,   // shot-exposure window + hide-shots bank
+    exposeT: 0, shiftCharge: SHIFT_MAX_TICKS, shiftUsed: 0, shiftMode: null, _btMark: null,   // exposure window, tick bank, in-flight shift
   };
   agents.push(a);
   return a;
@@ -267,10 +269,11 @@ function applyGhost(a, on) {
   } });
 }
 /* ---- backtrack ghosts ----
-   Two things worth seeing. `backtrackTrail` draws YOUR OWN recorded ticks — the hitboxes an enemy
-   cheat is still allowed to rewind you into, which is the only honest way to read why you died to a
-   shot that "missed". `backtrackGhost` marks the record a rewound shot actually landed on, whoever
-   fired it — so you can see the bot that just backtracked YOU as well as your own rewinds.
+   Two things worth seeing. `backtrackTrail` draws the OLDEST tick still in your own history — the one
+   hitbox furthest back that an enemy cheat is allowed to rewind you into, and therefore the only one
+   worth looking at. Drawing every recorded tick just walls your own view off with a column of models.
+   `backtrackGhost` marks the record a rewound shot actually landed on, whoever fired it — so you can
+   see the bot that just backtracked YOU as well as your own rewinds.
    Ghosts are hitbox-shaped on purpose: it's the hitbox, not the model, that gets shot. */
 const _trailPool = [], _markPool = [];
 const _GH_Y = [66.5, 53, 40, 17];                                     // head / chest / stomach / legs centres (see hitboxes())
@@ -291,14 +294,9 @@ function placeGhost(g, rec, opacity) {
 export function updateBacktrackGhosts(dt) {
   const human = refs.human; const v = human && human.cheats.visuals;
   let n = 0;
-  if (v && v.backtrackTrail && human.alive && human.trail) {
-    const cur = human._tick | 0;
-    for (const rec of human.trail) {
-      const age = cur - rec.tick; if (age <= 0) continue;              // the newest record IS your live body
-      const g = _trailPool[n] || ghostRig(_trailPool, 0x33ddff);
-      placeGhost(g, rec, 0.05 + 0.15 * (1 - age / (MAX_BACKTRACK_TICKS + 2)));   // faint: a full window of ghosts must not wall off your own view
-      n++;
-    }
+  if (v && v.backtrackTrail && human.alive && human.trail && human.trail.length > 1) {
+    const rec = human.trail[0];                                       // oldest surviving record = furthest anyone can rewind you
+    if ((human._tick | 0) - rec.tick > 0) { placeGhost(_trailPool[0] || ghostRig(_trailPool, 0x33ddff), rec, 0.3); n = 1; }
   }
   for (let i = n; i < _trailPool.length; i++) _trailPool[i].visible = false;
   let m = 0;
