@@ -6,15 +6,20 @@ import { WEAPONS, TEAM, JUMP_VEL } from './data.js';
 import { NODES, EDGES, RESCUE_ZONES, MAP_BOUNDS, astar, nearestNode, losClear } from './world.js';
 import { hitboxCenter, eyePos } from './agents.js';
 import { agents, GAME, clock } from './state.js';
-import { aimbotFire, moveAgent, meleeAttack, visibleTo, startReload, giveWeapon, hasAnyAmmo } from './combat.js';
-import { liveHostages } from './game.js';
+import { aimbotFire, moveAgent, meleeAttack, visibleTo, startReload, giveWeapon, hasAnyAmmo, autoStopScale } from './combat.js';
+import { liveHostages, armorBuy } from './game.js';
 
 export function botBuy(a) {
   const rifle = a.team === TEAM.CT ? "scar" : "g3", cost = k => WEAPONS[k].cost;
-  // ARMOR: buy kevlar+helmet whenever we'd still have a weapon's worth left — don't sit on cash
-  if (a.armor <= 0) {
-    if (a.money >= cost(rifle) + 1000 || a.money >= 1650) { a.armor = 100; a.helmet = true; a.money -= 1000; }
-    else if (a.money >= 650) { a.armor = 100; a.money -= 650; }
+  // ARMOR: never re-buy what we already own. armorBuy() prices the CS2 way — a kept helmet makes a
+  // vest top-up cost $650, not the full $1000, and full kit is simply not for sale.
+  const kit = armorBuy(a, "kevhelm");
+  if (kit) {
+    if (a.money >= kit.cost + cost(rifle) || a.money >= kit.cost + 650) { a.armor = kit.armor; a.helmet = kit.helmet; a.money -= kit.cost; }
+    else {
+      const vest = armorBuy(a, "kevlar");
+      if (vest && a.money >= vest.cost + 350) { a.armor = vest.armor; a.money -= vest.cost; }
+    }
   }
   // BEST weapon we can afford — no saving. Rifle first, then autosniper, then a pistol upgrade.
   let buy = null;
@@ -161,6 +166,9 @@ export function botThink(a, dt) {
       // repathing active so a bot wedged on cover routes around it. THIS is what breaks the camp standoff.
       a.aiState = "roam";
       if (needRepath(a)) { navTo(a, nearestNode(target.pos)); if (a.aiPathFail) navTo(a, roamNode(a)); a.aiTimer = 0.7 + Math.random() * 0.5; }   // target unreachable → relocate to a fresh angle, not the wall
+      // steady up for a wallbang, but never fully root: floored at 0.3 so a bot lining up a penetration
+      // still walks toward a real angle instead of camping the wall (the stalemate this branch exists to break)
+      if (a.cheats.aimbot.on && a.cheats.aimbot.autoStop) a.speedScale = Math.max(0.3, autoStopScale(a, true));
       followPath(a, dt, true);
       aimbotFire(a);                                  // still try — autowall punches thin walls; thick ones just won't fire
     } else {
@@ -172,8 +180,9 @@ export function botThink(a, dt) {
       if (style === "passive") desired = bestd > 340 ? dirTo.clone().setY(0).normalize() : right.clone().multiplyScalar(a.aiStrafe * 0.5);
       else if (style === "rush" || style === "rage") desired = bestd > 260 ? dirTo.clone().setY(0).normalize() : right.clone().multiplyScalar(a.aiStrafe);
       else desired = bestd > 300 ? dirTo.clone().setY(0).normalize() : right.clone().multiplyScalar(a.aiStrafe);   // peek/passive now commit to a push at mid-range instead of camping
-      // stop-to-shoot in engagement range (bloom drops); full speed only while still closing the gap
-      a.speedScale = (bestd > 360) ? 1 : 0.28;
+      // AUTO-STOP: shed exactly the speed the bot's own min hit chance needs — no more. Same helper the
+      // player's auto-stop uses, so a bot doesn't plant like a statue when a light slow would do.
+      a.speedScale = (a.cheats.aimbot.on && a.cheats.aimbot.autoStop) ? autoStopScale(a, true) : ((bestd > 360) ? 1 : 0.28);
       botMove(a, desired, dt, true);
       aimbotFire(a);
     }

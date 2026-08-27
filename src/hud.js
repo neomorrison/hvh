@@ -4,7 +4,7 @@
    tiny WebAudio SFX.  Also the small message/marker helpers everyone uses.  */
 import * as THREE from 'three';
 import { camera } from './core.js';
-import { WEAPONS, NADES, TEAM } from './data.js';
+import { WEAPONS, NADES, TEAM, SHIFT_MAX_TICKS, HIDE_SHOT_COST } from './data.js';
 import { WALLS, RESCUE_ZONES, MAP_BOUNDS, losClear } from './world.js';
 import { hitboxCenter, eyePos } from './agents.js';
 import { agents, refs, GAME, vm } from './state.js';
@@ -37,7 +37,7 @@ export function addKillFeedText(t) { const div = document.createElement("div"); 
 const hlEl = $("#hitlog");
 export function addHitLog(text, kind) { const d = document.createElement("div"); d.className = "hl " + (kind || "hit"); d.textContent = text; hlEl.appendChild(d); setTimeout(() => d.remove(), 2200); while (hlEl.children.length > 7) hlEl.firstChild.remove(); }
 
-export function updateAllHUD() { updateTopHUD(); updatePlayerHUD(); updateBotBars(); updateHUDWeapons(); }
+export function updateAllHUD() { updateTopHUD(); updatePlayerHUD(); updateTeamStatus(); updateHUDWeapons(); }
 export function updateTopHUD() {
   $("#scoreCT").textContent = GAME.scoreCT; $("#scoreT").textContent = GAME.scoreT;
   $("#roundInfo").textContent = `Round ${GAME.round} · ${GAME.half === 1 ? "First" : "Second"} Half · You: ${GAME.humanTeam}`;
@@ -45,8 +45,16 @@ export function updateTopHUD() {
 export function updatePlayerHUD() {
   const human = refs.human; if (!human) return;
   $("#hpStat").querySelector(".val").textContent = Math.max(0, Math.ceil(human.hp));
-  $("#armorStat").querySelector(".val").textContent = Math.max(0, Math.ceil(human.armor)) + "";
+  $("#armorStat").querySelector(".val").textContent = Math.max(0, Math.ceil(human.armor)) + (human.helmet ? " ⛑" : "");
   $("#money").textContent = "$" + human.money;
+  // hide-shots bank: how many shots you can still fire without your real angle being pinned
+  const tb = human.cheats.tickbase || {}, el = $("#tickStat");
+  if (tb.hideShots) {
+    const banked = Math.floor((human.shiftCharge || 0) / HIDE_SHOT_COST);
+    el.style.display = "block";
+    el.innerHTML = `<span class="tk-l">HIDE</span> <span class="tk-v${banked ? '' : ' out'}">${banked}</span>` +
+      `<span class="tk-bar"><span style="width:${Math.round(100 * Math.min(1, (human.shiftCharge || 0) / SHIFT_MAX_TICKS))}%"></span></span>`;
+  } else el.style.display = "none";
 }
 export function updateHUDWeapons() {
   const human = refs.human; if (!human || !human.cur) return;
@@ -64,13 +72,17 @@ export function updateHUDWeapons() {
   $("#wepList").innerHTML = list.map(k => `<span class="${(!human.equippedNade && k === human.cur) ? 'sel' : ''}">${WEAPONS[k].name}</span>`).join("  ·  ")
     + (heldNades.length ? `  ·  <span class="${human.equippedNade ? 'sel' : ''}">💣${heldNades.map(k => NADES[k].name).join(',')}</span>` : "");
 }
-export function updateBotBars() {
-  const colCT = $("#colCT"), colT = $("#colT"); colCT.innerHTML = ""; colT.innerHTML = "";
-  for (const a of agents) {
-    const chip = document.createElement("div"); chip.className = "pchip" + (a.alive ? "" : " dead");
-    const side = a.team === TEAM.CT ? "ct" : "t";
-    chip.innerHTML = `<span class="dot ${side}"></span><span class="nm ${a.isHuman ? 'you' : ''}">${a.name}</span><span class="hpbar"><span class="hpfill" style="width:${Math.max(0, a.hp)}%"></span></span>`;
-    (a.team === TEAM.CT ? colCT : colT).appendChild(chip);
+/* Team status in the top bar: side badge + one pip per player + the alive count, the way CS shows it.
+   The old HUD listed all 24 players with health bars down both sides of the screen, which was fine at
+   5v5 and a wall of text at 12v12 — the full per-player table lives on the Tab scoreboard. */
+export function updateTeamStatus() {
+  for (const [side, cls, pipsEl, aliveEl] of [[TEAM.CT, "ct", $("#pipsCT"), $("#aliveCT")], [TEAM.T, "t", $("#pipsT"), $("#aliveT")]]) {
+    const list = agents.filter(a => a.team === side);
+    aliveEl.textContent = list.reduce((n, a) => n + (a.alive ? 1 : 0), 0);
+    const key = list.map(a => (a.alive ? "1" : "0") + (a.isHuman ? "y" : "")).join("");
+    if (pipsEl._key === key) continue;                       // only rebuild the pips when someone actually dies
+    pipsEl._key = key;
+    pipsEl.innerHTML = list.map(a => `<span class="tb-pip ${a.alive ? "on " + cls : ""}${a.isHuman ? " me" : ""}"></span>`).join("");
   }
 }
 
@@ -99,7 +111,8 @@ export function renderScoreboard() {
   $("#sbTitle").textContent = `${mapName} · MR12 · CT ${GAME.scoreCT} : ${GAME.scoreT} T · Round ${GAME.round}`;
   for (const [side, el] of [[TEAM.CT, $("#sbCT")], [TEAM.T, $("#sbT")]]) {
     const list = agents.filter(a => a.team === side).sort((a, b) => b.kills - a.kills);
-    el.innerHTML = `<div class="hd"><span></span><span>${side}</span><span>K</span><span>D</span><span>$</span><span>Weapon</span></div>` +
+    const alive = list.reduce((n, a) => n + (a.alive ? 1 : 0), 0);
+    el.innerHTML = `<div class="hd"><span></span><span>${side} · ${alive}/${list.length} alive</span><span>K</span><span>D</span><span>$</span><span>Weapon</span></div>` +
       list.map(a => `<div class="sbrow ${side === TEAM.CT ? 'ct' : 't'} ${a.alive ? '' : 'dead'} ${a.isHuman ? 'me' : ''}">
         <span>${a.alive ? '●' : '✕'}</span><span class="${a.isHuman ? 'you' : ''}">${a.name}</span><span>${a.kills}</span><span>${a.deaths}</span><span>$${a.money}</span><span>${WEAPONS[a.cur]?.name || '-'}</span></div>`).join("");
   }

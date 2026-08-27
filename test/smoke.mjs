@@ -69,21 +69,95 @@ try {
   log('  nav edges blocked by walls:', blocked.length);
 
   let sawLive = false;
-  for (let i = 0; i < 14; i++) {                 // ~14s of sim — crosses the 12s buy → live + combat
+  // 45s: the 5s freeze plus enough live time for a 12v12 to actually meet and trade. Bots hold fire
+  // until their min hit chance is met now, so a 14s window lands before the first contact and proves
+  // nothing about whether combat works.
+  for (let i = 0; i < 45; i++) {
     HVH.fastForward(1);
     if (HVH.GAME.phase === 'live') sawLive = true;
-    if (i % 4 === 3) log('  …', i + 1, 's  phase:', HVH.GAME.phase, 'round:', HVH.GAME.round, 'score', HVH.GAME.scoreCT, ':', HVH.GAME.scoreT);
+    if (i % 10 === 9) log('  …', i + 1, 's  phase:', HVH.GAME.phase, 'round:', HVH.GAME.round, 'score', HVH.GAME.scoreCT, ':', HVH.GAME.scoreT);
   }
-  log('✓ fast-forwarded ~14s — phase:', HVH.GAME.phase, 'round:', HVH.GAME.round, 'score:', HVH.GAME.scoreCT, ':', HVH.GAME.scoreT);
+  log('✓ fast-forwarded ~45s — phase:', HVH.GAME.phase, 'round:', HVH.GAME.round, 'score:', HVH.GAME.scoreCT, ':', HVH.GAME.scoreT);
   if (!sawLive) { failures++; log('✗ never reached live phase'); }
-  const deaths = HVH.agents.filter(a => !a.alive).length, kills = HVH.agents.reduce((s, a) => s + a.kills, 0);
-  log('  combat happened — deaths:', deaths, 'total kills:', kills);
+  const kills = HVH.agents.reduce((s, a) => s + a.kills, 0);
+  log('  combat happened — total kills:', kills);
+  if (kills < 8) { failures++; log('✗ a 12v12 should have traded plenty of kills in 45s — bots are not shooting'); }
+  if (HVH.GAME.round < 2) { failures++; log('✗ no round resolved in 45s — the match is stalling'); }
 
   // --- combat math checks ---
   const d1 = HVH.computeDamage('deagle', 'head', 100, false, false, 0);
   const d2 = HVH.computeDamage('deagle', 'chest', 100, true, false, 100);
   log('  deagle head(no armor):', d1.damage, ' chest(armor):', d2.damage);
   if (!(d1.damage > d2.damage)) { failures++; log('✗ headshot should beat armored chest'); }
+
+  // --- tickbase: backtrack records, hide shots, exposure ---
+  {
+    const combat = await import('../src/combat.js');
+    const data = await import('../src/data.js');
+    const bot = HVH.agents.find(a => !a.isHuman && a.alive);
+    if (bot) {
+      if (!(bot.trail.length > 0)) { failures++; log('✗ agents should be recording backtrack ticks'); }
+      if (bot.trail.length > data.MAX_BACKTRACK_TICKS) { failures++; log('✗ backtrack history exceeded the tick window'); }
+      if (!(combat.backtrackTicks(bot) > 0)) { failures++; log('✗ bots should carry a backtrack config of their own'); }
+      log('  backtrack: window', data.MAX_BACKTRACK_TICKS, 'ticks @', data.TICK_RATE, '=', Math.round(1000 / data.TICK_RATE * data.MAX_BACKTRACK_TICKS) + 'ms · sample bot holds', bot.trail.length, 'records');
+      // an unhidden shot exposes the real angles; hide shots spends the shift bank instead
+      bot.cheats.antiaim.on = true; bot.cheats.antiaim.desync = true;
+      bot.cheats.tickbase.hideShots = false; bot.exposeT = 0; bot.shiftCharge = data.SHIFT_MAX_TICKS;
+      combat.onShotFired(bot);
+      if (!(bot.exposeT > 0)) { failures++; log('✗ an unhidden shot must expose the shooter'); }
+      bot.cheats.tickbase.hideShots = true; bot.exposeT = 0; bot.shiftCharge = data.SHIFT_MAX_TICKS;
+      const hid = combat.onShotFired(bot);
+      if (!(hid && bot.exposeT === 0 && bot.shiftCharge === data.SHIFT_MAX_TICKS - data.HIDE_SHOT_COST)) { failures++; log('✗ hide shots should suppress the exposure and spend shift ticks'); }
+      bot.shiftCharge = 0; bot.exposeT = 0;
+      if (combat.onShotFired(bot) !== false || !(bot.exposeT > 0)) { failures++; log('✗ an empty shift bank must not be able to hide a shot'); }
+    }
+  }
+
+  // --- armour rebuy pricing (CS2 rules) ---
+  {
+    const game = await import('../src/game.js');
+    const cases = [
+      [{ armor: 0, helmet: false }, 'kevhelm', 1000], [{ armor: 100, helmet: true }, 'kevhelm', null],
+      [{ armor: 40, helmet: true }, 'kevhelm', 650], [{ armor: 100, helmet: false }, 'kevhelm', 350],
+      [{ armor: 100, helmet: true }, 'kevlar', null], [{ armor: 0, helmet: false }, 'kevlar', 650],
+    ];
+    for (const [who, key, want] of cases) {
+      const deal = game.armorBuy(who, key), got = deal ? deal.cost : null;
+      if (got !== want) { failures++; log(`✗ armorBuy(${JSON.stringify(who)}, ${key}) = ${got}, expected ${want}`); }
+    }
+    log('  armour rebuy priced the CS2 way (full kit unbuyable, helmet kept → $650, vest full → $350)');
+  }
+
+  // --- auto-stop sheds only as much speed as the hit chance needs ---
+  {
+    const combat = await import('../src/combat.js');
+    const human = HVH.human, world = await import('../src/world.js');
+    const saved = world.WALLS.splice(0, world.WALLS.length);
+    const foe = HVH.agents.find(a => !a.isHuman && a.team !== human.team);
+    const aliveSaved = HVH.agents.map(a => a.alive);
+    for (const a of HVH.agents) if (a !== human && a !== foe) a.alive = false;
+    foe.alive = true; foe.crouch = false; foe.armor = 0; foe.helmet = false;
+    human.cheats.aimbot.on = true; human.cheats.aimbot.autoStop = true; human.cheats.aimbot.hitchance = 50;
+    human.cheats.aimbot.minDmg = 1; human.cheats.autowall.on = false; human.cheats.tickbase.backtrack = 0;
+    human.cur = 'usp'; human.weapons.usp = { ammo: 12, reserve: 24 };
+    human.reloadT = 0; human.firePenalty = 0; human.hurtBloom = 0; human.landBloom = 0;
+    human.crouch = false; human.scoped = false; human.onGround = true; human.walk = false; human.bhopBoost = 1;
+    human.pos.set(0, 0, 0); human.eye = 64; human.yaw = 0; human.pitch = 0; human.vel.set(0, 0, 0);
+    const seen = [];
+    for (const dist of [100, 400, 550]) {
+      foe.pos.set(0, 0, -dist); human.vel.set(0, 0, 0);
+      combat.beginSimFrame(); seen.push(+combat.autoStopScale(human, false).toFixed(2));
+    }
+    log('  auto-stop speed scale at 100u/400u/550u:', JSON.stringify(seen));
+    if (seen[0] !== 1) { failures++; log('✗ auto-stop should not slow a point-blank shot at all'); }
+    if (!seen.some(v => v > 0 && v < 1)) { failures++; log('✗ auto-stop should slow proportionally, not hard-stop'); }
+    human.cur = 'knife';
+    combat.beginSimFrame();
+    if (combat.autoStopScale(human, false) !== 1) { failures++; log('✗ auto-stop must never engage on the knife'); }
+    while (world.WALLS.length) world.WALLS.pop();
+    for (const w of saved) world.WALLS.push(w);
+    HVH.agents.forEach((a, i) => a.alive = aliveSaved[i]);
+  }
 
   // penetration: thin wall reduces, absurdly thick wall blocks
   if (HVH.testPenetration) {

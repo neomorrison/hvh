@@ -6,6 +6,7 @@ import * as THREE from 'three';
 import {
   WEAPONS, INACC, INACC_K, AIRBORNE_INACC, LAND_INACC, GRAVITY, JUMP_VEL,
   EYE_STAND, EYE_CROUCH, PLAYER_RADIUS, ECON, computeDamage, TEAM, BHOP_MAX,
+  TICK, MAX_BACKTRACK_TICKS, BT_SAMPLES, EXPOSE_TIME, SHIFT_MAX_TICKS, HIDE_SHOT_COST, SHIFT_REGEN,
 } from './data.js';
 import { WALLS, segAABB, rayAABB, penetrate, losClear, collideMove, MAP_BOUNDS, CT_SPAWNS, T_SPAWNS } from './world.js';
 import { meshBackend } from './sourcemap.js';
@@ -62,7 +63,7 @@ export function moveAgent(a, dirXZ, dt, combat) {
   if (a.crouch) speed *= 0.52;
   if (a.walk) speed *= 0.52;
   if (combat) speed *= 0.9;
-  if (a.speedScale != null) speed *= a.speedScale;          // auto-stop
+  if (a.speedScale != null) speed *= a.speedScale;          // auto-stop (see autoStopScale — a partial slow, not a hard stop)
   if (a.bhopBoost) speed *= Math.min(BHOP_MAX, a.bhopBoost);   // bunny-hop chain speed boost (human only sets it)
   const v = dirXZ.clone().setY(0); if (v.lengthSq() > 0) v.normalize().multiplyScalar(speed);
   a.vel.x = v.x; a.vel.z = v.z;
@@ -141,6 +142,81 @@ export function moveAgent(a, dirXZ, dt, combat) {
   collideMove(a.pos, PLAYER_RADIUS, a.pos.y, a.crouch ? 46 : 72);   // then re-resolve walls
 }
 
+/* ============================== [TICKBASE] ==============================
+   Backtrack, hide shots and the desync side-flip all live off one thing: a per-agent ring buffer of
+   recorded TICKS.  Ticks, not milliseconds — lag compensation on a real server keeps a fixed number
+   of ticks of history and a cheat rewinds a target to one of THOSE, so a millisecond slider was never
+   the right unit (and the old one wasn't wired to anything at all).                                  */
+
+/* One simulation tick of history per agent.  Called for every agent, every step. */
+export function recordTick(a, dt) {
+  const tr = a.trail || (a.trail = []);
+  if (!a.alive) { tr.length = 0; a._recAcc = 0; return; }          // you cannot rewind a corpse
+  a._recAcc = (a._recAcc || 0) + dt;
+  if (a._recAcc < TICK) return;
+  a._recAcc = 0;                                                    // drop the remainder: one record per boundary, never a burst
+  a._tick = (a._tick | 0) + 1;
+  tr.push({ tick: a._tick, pos: a.pos.clone(), crouch: !!a.crouch, eye: a.eye });
+  while (tr.length > MAX_BACKTRACK_TICKS) tr.shift();
+}
+
+/* The records `shooter` is still allowed to rewind `tgt` into, newest first, thinned to BT_SAMPLES
+   so a 16-tick window doesn't cost 16 line-of-sight traces per bot per frame. */
+function sampleTrail(tgt, ticks) {
+  const tr = tgt.trail; if (!tr || !tr.length) return [];
+  const cur = tgt._tick | 0, out = [];
+  for (let i = tr.length - 1; i >= 0; i--) { const r = tr[i], age = cur - r.tick; if (age > ticks) break; if (age > 0) out.push(r); }
+  if (out.length <= BT_SAMPLES) return out;
+  const step = (out.length - 1) / (BT_SAMPLES - 1), picked = [];
+  for (let i = 0; i < BT_SAMPLES; i++) picked.push(out[Math.round(i * step)]);
+  return picked;
+}
+export function backtrackTicks(a) { return Math.min(MAX_BACKTRACK_TICKS, Math.max(0, (a.cheats.tickbase && a.cheats.tickbase.backtrack) | 0)); }
+
+/* Rewinding only changes the answer if the target actually MOVED inside the window — against someone
+   holding still every record is the same shot.  Pure arithmetic, so it's the cheap guard that keeps the
+   line-of-sight work in sampleTrail() off the hot path for the (common) stationary case. */
+function trailMoved(tgt, ticks) {
+  const tr = tgt.trail; if (!tr || !tr.length) return false;
+  const cur = tgt._tick | 0;
+  for (let i = tr.length - 1; i >= 0; i--) {
+    const r = tr[i]; if (cur - r.tick > ticks) break;
+    if (r.pos.distanceToSquared(tgt.pos) > 576) return true;      // >24u ≈ 1.5 player radii apart
+  }
+  return false;
+}
+
+/* Firing normally PINS your real angles at whoever you're shooting — that is exactly why a desyncing
+   player's head becomes readable the moment they take a shot.  Hide shots spends banked shift ticks to
+   push the shot out while the fake angle is still up.  The bank refills at a fraction of real time
+   (SHIFT_REGEN), so taps can be hidden and a spray can't.  Returns true if the shot was hidden. */
+export function onShotFired(a) {
+  const tb = a.cheats.tickbase || {}, aa = a.cheats.antiaim;
+  const canHide = !!(aa && aa.on && aa.desync && tb.hideShots);
+  if (canHide && (a.shiftCharge || 0) >= HIDE_SHOT_COST) { a.shiftCharge -= HIDE_SHOT_COST; a.hideFx = 0.25; return true; }
+  a.exposeT = EXPOSE_TIME;
+  a.desyncSide = -(a.desyncSide || 1);          // and don't come back on the SAME side afterwards
+  if (a.isHuman && canHide) addHitLog("shot exposed — no shift ticks", "inacc");
+  return false;
+}
+
+/* Per-step tickbase bookkeeping: bleed the exposure window, refill the shift bank, and keep the desync
+   side moving.  desyncSide never changed before, so every agent's fake was permanently on one side —
+   a free read for any resolver.  It now flips on its own cadence (fast under jitter/spin AA). */
+export function updateTickbase(a, dt) {
+  if (a.exposeT > 0) a.exposeT -= dt;
+  if (a.hideFx > 0) a.hideFx -= dt;
+  a.shiftCharge = Math.min(SHIFT_MAX_TICKS, (a.shiftCharge || 0) + (dt / TICK) * SHIFT_REGEN);
+  const aa = a.cheats.antiaim;
+  if (!aa || !aa.on || !aa.desync) return;
+  a._sideT = (a._sideT || 0) - dt;
+  if (a._sideT <= 0) {
+    const fast = aa.yaw === "jitter" || aa.yaw === "spin";
+    a._sideT = (fast ? 0.10 : 0.32) + Math.random() * (fast ? 0.12 : 0.45);
+    a.desyncSide = Math.random() < 0.5 ? 1 : -1;
+  }
+}
+
 /* Hit chance = pure accuracy from the live bloom cone vs the target hitbox's
    angular size at the crosshair.  No desync / resolver / anti-aim term — a shot
    aimed at the hitbox lands iff the cone is tight enough to keep it on target. */
@@ -155,19 +231,44 @@ export function computeAccuracy(a, aimPoint, target, group) {
   return THREE.MathUtils.clamp(targetHalfAngle / cone, 0, 1);
 }
 
+/* Evaluate ONE candidate position of a target — either the live body or one of its recorded ticks.
+   `ghost` only needs { pos, crouch }, which is all hitboxes()/hitboxCenter() read. */
+function evalShot(a, tgt, ghost, order, cb) {
+  const me = eyePos(a);
+  const directVis = visibleTo(a, ghost);
+  const none = { group: null, aimPoint: null, through: null, dmg: 0 };
+  const shots = [];
+  for (const group of order) {
+    const aimPoint = hitboxCenter(ghost, group);
+    const through = directVis ? { factor: 1, surfaces: 0, blocked: false } : penetrate(me, aimPoint, a.cur);
+    if (!directVis && (!cb.autowall.on || through.blocked || through.factor <= 0)) continue;
+    const base = computeDamage(a.cur, group, me.distanceTo(aimPoint), tgt.armor > 0, tgt.helmet, tgt.armor);
+    shots.push({ group, aimPoint, through, dmg: Math.round(base.damage * through.factor) });
+  }
+  if (!shots.length) return none;
+  // A wallbang keeps its hard min-damage gate — that's what min damage is FOR. A clear shot never
+  // demands more damage than the gun can physically deliver here: a pistol round against armour would
+  // otherwise leave a 30-min-damage bot standing there refusing to shoot at all.
+  const want = directVis
+    ? Math.min(cb.aimbot.minDmg || 1, Math.max(...shots.map(x => x.dmg)))
+    : Math.max(cb.aimbot.minDmg || 1, cb.autowall.minDmg || 1);
+  for (const x of shots) if (x.dmg >= want) return x;
+  return none;
+}
+
 /* Shared "can I take this shot right now?" predicate used by BOTH auto-shoot and
-   auto-stop so they agree exactly.  Picks the best target + first hitbox meeting
-   min-damage, then evaluates min-hit-chance and weapon-firable.
-   Returns { have, ok, tgt, group, aimPoint, through, dmg, hitChance } where
+   auto-stop so they agree exactly.  Picks the best target, then the best position of that target —
+   live, or rewound through its backtrack records — and the first hitbox meeting min damage.
+   Returns { have, ok, tgt, group, aimPoint, through, dmg, hitChance, btTicks, rec } where
      have = a min-damage hitbox exists to aim at,
      ok   = have AND firable (real gun, not reloading, has ammo) AND hitChance >= min. */
-export function canShoot(a) {
+function selectShot(a) {
   const cb = a.cheats;
-  const res = { have: false, ok: false, tgt: null, group: null, aimPoint: null, through: null, dmg: 0, hitChance: 0 };
+  const res = { have: false, ok: false, tgt: null, group: null, aimPoint: null, through: null, dmg: 0, hitChance: 0, btTicks: 0, rec: null };
   const enemies = agents.filter(t => t.alive && t.team !== a.team);
   if (!enemies.length) return res;
   const me = eyePos(a);
-  let cands = enemies.map(t => ({ t, d: me.distanceTo(t.pos), vis: visibleTo(a, t) })).filter(c => c.vis || cb.autowall.on);
+  let cands = enemies.map(t => ({ t, d: me.distanceTo(t.pos), vis: visibleTo(a, t) })).filter(c => c.vis || cb.autowall.on || backtrackTicks(a) > 0);
   if (!cands.length) return res;
   if (cb.aimbot.target === "lowhp") cands.sort((x, y) => x.t.hp - y.t.hp);
   else if (cb.aimbot.target === "distance") cands.sort((x, y) => x.d - y.d);
@@ -176,8 +277,8 @@ export function canShoot(a) {
     cands.forEach(c => { const to = hitboxCenter(c.t, "chest").sub(me).normalize(); c.dot = fwd.dot(to); });
     cands.sort((x, y) => y.dot - x.dot);
   }
+  cands.sort((x, y) => (y.vis ? 1 : 0) - (x.vis ? 1 : 0));   // stable: a target we can actually see outranks one we can only rewind/wallbang
   const tgt = cands[0].t; res.tgt = tgt;
-  const directVis = visibleTo(a, tgt);
   let order = cb.aimbot.forceBody ? ["stomach", "chest", "legs"]
     : (cb.aimbot.priority === "head" ? ["head", "chest", "stomach"] : ["chest", "stomach", "head"]);
   // baim-if-lethal: if a body shot already KILLS, take the bigger/safer body hitbox instead of the head
@@ -185,25 +286,80 @@ export function canShoot(a) {
     const cd = me.distanceTo(hitboxCenter(tgt, "chest")), bodyDmg = computeDamage(a.cur, "chest", cd, tgt.armor > 0, tgt.helmet, tgt.armor).damage;
     if (bodyDmg >= tgt.hp) order = ["chest", "stomach", "head"];
   }
-  const minDmg = Math.max(cb.aimbot.minDmg || 1, !directVis ? (cb.autowall.minDmg || 1) : 1);
-  for (const group of order) {
-    const aimPoint = hitboxCenter(tgt, group);
-    const dist = me.distanceTo(aimPoint);
-    const through = penetrate(me, aimPoint, a.cur);
-    if (!directVis) { if (!cb.autowall.on || through.blocked || through.factor <= 0) continue; }
-    const base = computeDamage(a.cur, group, dist, tgt.armor > 0, tgt.helmet, tgt.armor);
-    const dmg = Math.round(base.damage * (directVis ? 1 : through.factor));
-    if (dmg >= minDmg) { res.group = group; res.aimPoint = aimPoint; res.through = directVis ? { factor: 1, surfaces: 0, blocked: false } : through; res.dmg = dmg; break; }
+  const minHc = cb.aimbot.hitchance || 0;
+  const accOf = x => (x.group ? computeAccuracy(a, x.aimPoint, tgt, x.group) : 0);
+  let best = evalShot(a, tgt, tgt, order, cb), bestAcc = accOf(best), bestAge = 0, bestRec = null;
+  // BACKTRACK — only when the live shot isn't already good enough. A peeker who is behind cover NOW
+  // was standing in the open a few ticks ago; the server still accepts a hit on that tick.
+  // ...but only when rewinding can actually change the answer: the live shot has to be failing AND the
+  // target has to have moved during the window. Against someone standing still every recorded tick is
+  // the same shot, and the fix for a merely-bloomed one is auto-stop, not time travel.
+  const bt = backtrackTicks(a);
+  if (bt > 0 && bestAcc * 100 < minHc && (!best.group || trailMoved(tgt, bt))) {
+    for (const rec of sampleTrail(tgt, bt)) {
+      const alt = evalShot(a, tgt, rec, order, cb);
+      if (!alt.group) continue;
+      const acc = accOf(alt);
+      if (acc > bestAcc) { best = alt; bestAcc = acc; bestAge = (tgt._tick | 0) - rec.tick; bestRec = rec; }
+      if (bestAcc * 100 >= minHc) break;
+    }
   }
-  if (!res.group) return res;
-  res.have = true;
-  res.hitChance = computeAccuracy(a, res.aimPoint, tgt, res.group);
+  if (!best.group) return res;
+  res.have = true; res.group = best.group; res.aimPoint = best.aimPoint; res.through = best.through; res.dmg = best.dmg;
+  res.btTicks = bestAge; res.rec = bestRec;
+  return res;
+}
+
+/* Target/hitbox selection is the expensive half (line-of-sight traces + penetration), and it does not
+   depend on how fast we're moving — so it's memoised for one simulation step.  Hit chance and the
+   firable gate are re-derived on every call, because auto-stop's whole job is asking "what would the
+   hit chance be if I were slower" between two calls in the SAME step. */
+let _simFrame = 0;
+export function beginSimFrame() { _simFrame++; }
+export function canShoot(a) {
+  let res = a._cs;
+  if (a._csFrame !== _simFrame || !res || (res.tgt && !res.tgt.alive)) { res = selectShot(a); a._cs = res; a._csFrame = _simFrame; }
+  res.hitChance = 0; res.ok = false;
+  if (!res.have) return res;
+  res.hitChance = computeAccuracy(a, res.aimPoint, res.tgt, res.group);
   const w = WEAPONS[a.cur];
   const firable = !!w && !w.melee && a.reloadT <= 0 && (a.weapons[a.cur]?.ammo || 0) > 0;
-  // The human's auto-shoot must respect the configured Min Hit Chance (items 10/11). Bots are
-  // aimbots — they always take the shot when able; their persona skill caps the hit roll below.
-  res.ok = firable && (!a.isHuman || res.hitChance * 100 >= (cb.aimbot.hitchance || 0));
+  // EVERYONE respects min hit chance now, bots included. Bots used to ignore it and spray at whatever
+  // accuracy they happened to have, then had their hit roll CAPPED by their persona on top — which is
+  // why one player's aimbot could hold off ten of them. Same gate, same rules, both sides.
+  res.ok = firable && res.hitChance * 100 >= (a.cheats.aimbot.hitchance || 0);
   return res;
+}
+
+/* ---- auto-stop ----
+   Not a hard stop: slow down EXACTLY as much as the configured min hit chance needs and no more, so
+   you keep whatever movement the shot can afford instead of planting like a statue every time an enemy
+   crosses the crosshair.  Returns a speed multiplier in [0,1]. */
+export function baseMoveSpeed(a, combat) {
+  const w = WEAPONS[a.cur] || { run: 240 };
+  let speed = (a.scoped && w.scopedRun) ? w.scopedRun : (w.run || 240);
+  if (a.crouch) speed *= 0.52;
+  if (a.walk) speed *= 0.52;
+  if (combat) speed *= 0.9;
+  if (a.bhopBoost) speed *= Math.min(BHOP_MAX, a.bhopBoost);
+  return speed;
+}
+export function autoStopScale(a, combat) {
+  const w = WEAPONS[a.cur];
+  if (!w || w.melee) return 1;                                     // never auto-stop on the knife
+  const wp = a.weapons[a.cur];
+  if (a.reloadT > 0 || !wp || (wp.ammo || 0) <= 0) return 1;
+  const cs = canShoot(a);
+  if (!cs.have || !cs.tgt) return 1;                               // nothing worth slowing down for
+  const need = THREE.MathUtils.clamp((a.cheats.aimbot.hitchance || 0) / 100, 0, 1);
+  if (need <= 0) return 1;
+  const vx = a.vel.x, vz = a.vel.z, full = baseMoveSpeed(a, combat);
+  const accAt = sc => { a.vel.x = full * sc; a.vel.z = 0; const acc = computeAccuracy(a, cs.aimPoint, cs.tgt, cs.group); a.vel.x = vx; a.vel.z = vz; return acc; };
+  if (accAt(1) >= need) return 1;                                  // already accurate enough at full speed
+  if (accAt(0) < need) return 1;                                   // even planted this shot isn't makeable — don't root for nothing, keep closing
+  let lo = 0, hi = 1;
+  for (let i = 0; i < 8; i++) { const mid = (lo + hi) / 2; if (accAt(mid) >= need) lo = mid; else hi = mid; }
+  return lo;
 }
 
 export function applyHit(shooter, target, group, dist, throughWall) {
@@ -257,6 +413,7 @@ export function fireWeaponCommon(a) {
   a.lastShot = performance.now();
   const I = INACC[a.cur]; if (I) { a.firePenalty = Math.min(I.max, (a.firePenalty || 0) + I.fire); }
   if (a.cur === "r8" && a.fireMode === "fan") a.firePenalty = (a.firePenalty || 0) + 30;
+  onShotFired(a);          // pins the real angles for a moment — unless hide shots pays for it
   sfxFire(a);
 }
 
@@ -337,12 +494,15 @@ export function aimbotFire(a) {
     }
   }
   addTracer(me.clone().add(dirTo.clone().multiplyScalar(40)), cs.aimPoint);
+  if (cs.rec) cs.tgt._btMark = { pos: cs.rec.pos, crouch: cs.rec.crouch, life: 0.7 };   // the record we rewound to (drawn by the backtrack ghost visual)
   if (meshBackend.active) { const brk = meshBackend.breakWindowsAlong(me.x, me.y, me.z, dirTo.x, dirTo.y, dirTo.z, dist + 60); if (brk && brk.center) sfxImpact(brk.center, true); }   // shatter glass in the line of fire
-  // human lands at pure bloom accuracy (already past the min-hit-chance gate); a bot lands at
-  // min(accuracy, persona skill) so distance/movement still matter but skilled bots stay lethal.
-  const hitProb = a.isHuman ? cs.hitChance : Math.min(cs.hitChance, (cb.aimbot.hitchance || 100) / 100);
-  if (Math.random() < hitProb) {
+  // Everyone lands at pure bloom accuracy. Bots used to have their roll capped by a persona "skill"
+  // number on top of the accuracy they'd already earned, which made the player's identical cheat
+  // strictly better than theirs — the 1-v-10 problem. Same maths for every agent now; a persona's
+  // edge is its min hit chance, min damage, backtrack depth and resolver, not a secret handicap.
+  if (Math.random() < cs.hitChance) {
     applyHit(a, cs.tgt, cs.group, dist, cs.through);
+    if (a.isHuman && cs.btTicks > 0) addHitLog(`backtracked ${cs.btTicks} tick${cs.btTicks > 1 ? 's' : ''}`, "hs");
   } else {
     if (a.isHuman) addHitLog("missed — inaccuracy", "inacc");
     addImpact(cs.aimPoint.clone().add(new THREE.Vector3((Math.random() - 0.5) * 40, (Math.random() - 0.5) * 40, (Math.random() - 0.5) * 40)));

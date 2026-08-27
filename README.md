@@ -1,6 +1,6 @@
 # cs_office HvH
 
-A browser-based **Counter-Strike 2 "Hack vs Hack"** game — 1 human and bots on an original recreation of the `cs_office` layout. Everyone cheats.
+A browser-based **Counter-Strike 2 "Hack vs Hack"** game — 12 v 12 on an original recreation of the `cs_office` layout. Everyone cheats, and the bots run the same cheat you do.
 
 ## Play
 
@@ -19,14 +19,20 @@ python3 -m http.server 8000
 - **MR12** (best-of-24, switch sides at half, first to 13) with a CS2-inspired economy.
 - **Faithful damage model** — CS2 hitgroup multipliers, the real armor formula, and the exact distance falloff (`base × range_modifier^(dist/500)`).
 - **Bullet penetration (autowall)** — shooting through walls **costs damage** (scaled by surface thickness & material), and a wall too thick/dense for the weapon's penetration power **stops the bullet** entirely. 
-- **Faithful inaccuracy** — movement, jump, crouch, spray, recovery, flinch and landing penalty.
+- **Faithful inaccuracy** — movement, jump, crouch, spray, recovery, flinch and landing penalty. Pistols are deliberately unforgiving: a standing first shot is good but never free at range, and the per-shot bloom out-paces the fire rate, so spamming collapses the cone and you have to tap.
+- **Backtrack in ticks, not milliseconds** — every agent records a rolling 16-tick (@64 tick = 250ms) lag-compensation history. When the live shot is gone and the target has actually moved, the aimbot rewinds to a recorded tick and shoots where they *were*. `Backtrack trail` draws your own rewindable hitboxes so you can see what an enemy cheat is still allowed to shoot; `Backtrack ghost` marks the tick you rewound someone to.
+- **Hide shots** — firing normally *pins your real angles at the target*, which is exactly what makes a desyncing player's head readable the instant they shoot. Hide shots spends banked shift ticks to push the shot out while the fake angle is still up; the bank refills at a fraction of real time, so you can hide taps and never a spray. The HUD shows how many shots you have banked.
+- **Auto-stop that slows, not stops** — it sheds exactly as much speed as your configured min hit chance needs and no more, so a close shot barely slows you and only a long one plants you. Never engages on the knife.
 - **Weapons:** R8 Revolver (slow hammer-cock primary + faster fan, both with real CS2 cadence), Desert Eagle, Dual Berettas, USP-S / Glock-18, SSG08, SCAR-20 / G3SG1, plus a knife and grenades — CS2-accurate cost, damage and fire rate.
-- **HvH bots** with unique handles & playstyles, each running aimbot, anti-aim, resolver, autowall, body-aim, and auto-knife when out of ammo.
-- **Cheat menu (press `I`)** — aimbot (FOV, hitchance, silent, triggerbot, auto-stop, auto-scope, auto-knife, auto-revolver), autowall, resolver, anti-aim, backtrack, and wallhack/ESP. Config saves to your browser.
+- **HvH bots on equal footing** — unique handles & playstyles, each running aimbot, anti-aim, resolver, autowall, backtrack, hide shots, body-aim, and auto-knife when out of ammo. Bots respect their own min hit chance and min damage (≈40% / 30 by default, spread by persona) and land shots at the same bloom accuracy you do — no hidden handicap, so a lone player can't hold off ten of them.
+- **CS2 armour rules** — a full kit isn't for sale; a vest top-up with the helmet still on costs $650, not $1000; a full vest with no helmet buys the helmet alone for $350.
+- **Cheat menu (press `I`)** — aimbot (FOV, hitchance, min damage, silent, triggerbot, auto-stop, auto-scope, auto-knife, auto-revolver), autowall, resolver, anti-aim, tickbase (backtrack ticks + hide shots), and wallhack/ESP. Config saves to your browser.
 
 ## Controls
 
 `WASD` move · mouse look · LMB fire · RMB scope/burst/fan · `R` reload · `1/2/3` pistol/rifle/knife · `4`/`G` grenade · `B` buy · `E` rescue hostage · `V` third person · `Tab` scoreboard · `I` cheat menu · `F1`–`F8` cheat toggles.
+
+The top bar carries the CS-style team readout — side badge, a pip per player and the alive count on each side of the score. The full 12-a-side table with kills, deaths, money and weapons is on `Tab`.
 
 **Crouch** is bound to `Ctrl` **or** `C` — use `C` if your browser closes the tab on `Ctrl+W`.
 

@@ -29,17 +29,26 @@
   #roundInfo { font-size:11px; color:#9aa4b2; }
   #phaseBanner { font-size:12px; color:#ffd86b; height:13px; }
 
-  #botbars { position:absolute; top:74px; left:50%; transform:translateX(-50%); display:flex; gap:24px; }
-  .teamcol { display:flex; flex-direction:column; gap:3px; }
-  .teamcol.t { align-items:flex-end; }
-  .pchip { display:flex; align-items:center; gap:6px; font-size:11px; background:rgba(8,10,14,.6); padding:2px 7px; border-radius:3px; min-width:120px; }
-  .pchip.dead { opacity:.32; }
-  .pchip .nm { flex:1; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-  .pchip .hpbar { width:34px; height:5px; background:#333; border-radius:2px; overflow:hidden; }
-  .pchip .hpfill { height:100%; background:#46d35f; }
-  .dot { width:7px; height:7px; border-radius:50%; }
-  .dot.ct { background:#7db9ff; } .dot.t { background:#ffce6b; }
+  /* team status: side badge + one pip per player + alive count (CS-style; the full table is on Tab) */
+  .tb-team { display:flex; align-items:center; gap:8px; padding:0 12px; }
+  .tb-badge { width:26px; height:26px; border-radius:5px; display:flex; align-items:center; justify-content:center; font-size:11px; font-weight:bold; letter-spacing:.5px; flex:none; }
+  .tb-badge.ct { background:linear-gradient(#4a86d8,#26508f); color:#eaf3ff; box-shadow:inset 0 0 0 1px #79aef2; }
+  .tb-badge.t  { background:linear-gradient(#d8a63c,#8f651a); color:#fff6e0; box-shadow:inset 0 0 0 1px #f0cd7c; }
+  .tb-pips { display:grid; grid-auto-flow:column; grid-template-rows:repeat(2,5px); gap:2px 2px; }
+  .tb-pip { width:5px; height:5px; border-radius:1px; background:#39404d; }
+  .tb-pip.on.ct { background:#7db9ff; } .tb-pip.on.t { background:#ffce6b; }
+  .tb-pip.me { outline:1px solid #ffe9a8; outline-offset:1px; }
+  .tb-alive { font-size:16px; font-weight:bold; min-width:16px; text-align:center; }
+  .tb-team.ct .tb-alive { color:#7db9ff; } .tb-team.t .tb-alive { color:#ffce6b; }
   .you { color:#ffe9a8; font-weight:bold; }
+
+  /* hide-shots (tickbase) bank */
+  #tickStat { display:none; margin-top:5px; font-size:11px; color:#cfd6e2; }
+  #tickStat .tk-l { color:#6a7585; letter-spacing:1px; }
+  #tickStat .tk-v { color:#4dff6a; font-weight:bold; font-size:13px; }
+  #tickStat .tk-v.out { color:#ff6464; }
+  #tickStat .tk-bar { display:inline-block; width:52px; height:4px; background:#2a3340; border-radius:2px; overflow:hidden; margin-left:5px; vertical-align:middle; }
+  #tickStat .tk-bar > span { display:block; height:100%; background:#4dff6a; }
 
   #bottomleft { position:absolute; left:18px; bottom:16px; }
   #hp-armor { display:flex; align-items:flex-end; gap:18px; }
@@ -102,6 +111,8 @@
   .buyitem.cant { opacity:.4; cursor:not-allowed; }
   .buyitem.owned { border-color:#46d35f; box-shadow:0 0 0 1px #46d35f inset; background:#16241a; }
   .buyitem.owned::after { content:"OWNED · right-click to sell"; display:block; font-size:9px; color:#46d35f; margin-top:3px; letter-spacing:.3px; }
+  .buyitem.full { opacity:.45; cursor:not-allowed; border-color:#46d35f; }
+  .buyitem.full::after { content:"ALREADY EQUIPPED"; display:block; font-size:9px; color:#46d35f; margin-top:3px; letter-spacing:.3px; }
   .buyitem .bn { font-weight:bold; font-size:14px; display:flex; justify-content:space-between; }
   .buyitem .bp { color:#46d35f; font-size:13px; }
   .buyitem .bd { font-size:11px; color:#8b94a3; margin-top:3px; }
@@ -130,13 +141,15 @@
   .switch input:checked+.slider{background:#ff4d6d;}
   .switch input:checked+.slider:before{transform:translateX(18px);}
   .cval{font-size:11px;color:#8b94a3;width:34px;text-align:right;}
+  .cval.wide{width:86px;}
 
   /* scoreboard */
-  #sbCard { width:760px; }
-  #sbCard h2 { text-align:center; margin-bottom:10px; }
-  .sbteam { margin-bottom:12px; }
-  .sbteam .hd { display:grid; grid-template-columns:34px 1fr 60px 60px 60px 70px; font-size:11px; color:#7d8696; padding:4px 8px; text-transform:uppercase; }
-  .sbrow { display:grid; grid-template-columns:34px 1fr 60px 60px 60px 70px; font-size:14px; padding:5px 8px; border-radius:4px; align-items:center; }
+  /* 12 rows a side has to fit — tighter than the old 5v5 layout */
+  #sbCard { width:760px; max-height:90vh; overflow-y:auto; }
+  #sbCard h2 { text-align:center; margin-bottom:8px; font-size:16px; }
+  .sbteam { margin-bottom:8px; }
+  .sbteam .hd { display:grid; grid-template-columns:26px 1fr 46px 46px 66px 84px; font-size:10px; color:#7d8696; padding:3px 8px; text-transform:uppercase; }
+  .sbrow { display:grid; grid-template-columns:26px 1fr 46px 46px 66px 84px; font-size:12.5px; padding:2px 8px; border-radius:3px; align-items:center; }
   .sbrow.ct { background:rgba(80,140,255,.08);} .sbrow.t{background:rgba(255,190,80,.08);}
   .sbrow.dead{opacity:.45;} .sbrow.me{outline:1px solid #ffd86b;}
 
@@ -199,6 +212,11 @@
   <canvas id="radar" width="190" height="150"></canvas>
 
   <div id="topbar">
+    <div class="tb-team ct">
+      <div class="tb-badge ct" title="Counter-Terrorists">CT</div>
+      <div class="tb-pips" id="pipsCT"></div>
+      <div class="tb-alive" id="aliveCT">12</div>
+    </div>
     <div class="tb-score tb-ct" id="scoreCT">0</div>
     <div class="tb-mid">
       <div id="phaseBanner"></div>
@@ -206,11 +224,11 @@
       <div id="roundInfo">Round 1 · First Half</div>
     </div>
     <div class="tb-score tb-t" id="scoreT">0</div>
-  </div>
-
-  <div id="botbars">
-    <div class="teamcol ct" id="colCT"></div>
-    <div class="teamcol t" id="colT"></div>
+    <div class="tb-team t">
+      <div class="tb-alive" id="aliveT">12</div>
+      <div class="tb-pips" id="pipsT"></div>
+      <div class="tb-badge t" title="Terrorists">T</div>
+    </div>
   </div>
 
   <div id="killfeed"></div>
@@ -236,6 +254,7 @@
       <div class="stat" id="armorStat"><span class="ico">🛡</span><span class="val">0</span></div>
     </div>
     <div id="money">$800</div>
+    <div id="tickStat"></div>
   </div>
 
   <div id="bottomright">
@@ -276,7 +295,7 @@
 <!-- ================= START SCREEN ================= -->
 <div class="panel show" id="startPanel"><div class="card" id="startCard">
   <h1>cs_office <span class="hvh">HvH</span></h1>
-  <div class="tag">CS2 Hack-vs-Hack · 1 human + 4 bots vs 5 bots · Best-of-24 (MR12), switch at half</div>
+  <div class="tag">CS2 Hack-vs-Hack · 12 v 12, everyone cheats · Best-of-24 (MR12), switch at half</div>
   <div class="controls">
     <div><b>WASD</b> move</div><div><b>Mouse</b> look</div>
     <div><b>Left click</b> fire</div><div><b>Right click</b> scope / burst / fan</div>

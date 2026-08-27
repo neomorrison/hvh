@@ -33,11 +33,16 @@ export const WEAPONS = {
 
 // CS2 inaccuracy model (community-measured units). cone_radians = inaccuracy * INACC_K
 export const INACC = {
-  deagle: { stand: 6.2,  crouch: 4.18, run: 54.3,   fire: 21, max: 85,   recov: 0.40 },
-  r8:     { stand: 2.52, crouch: 1.52, run: 9.02,   fire: 6,  max: 18.6, recov: 0.40 },
-  duals:  { stand: 9.0,  crouch: 7.25, run: 26.85,  fire: 12, max: 66,   recov: 0.40 },
-  usp:    { stand: 6.4,  crouch: 5.18, run: 20.27,  fire: 13, max: 56,   recov: 0.44 },
-  glock:  { stand: 7.6,  crouch: 6.2,  run: 17.6,   fire: 13, max: 56,   recov: 0.42 },
+  // PISTOLS. The old numbers made a standing first shot a guaranteed headshot out to ~500u and let
+  // you spam through a mag with barely any penalty. CS2 pistols are the opposite: a deliberate first
+  // shot is good but never free at range, and the per-shot bloom out-paces the fire rate, so spamming
+  // collapses the cone and you have to tap. `stand`/`crouch` roughly doubled; `fire` bloom raised and
+  // `max` lifted so a full spam actually reaches the cap.
+  deagle: { stand: 11.5, crouch: 8.6,  run: 62.0,   fire: 30, max: 115,  recov: 0.42 },
+  r8:     { stand: 4.6,  crouch: 2.9,  run: 12.0,   fire: 20, max: 62,   recov: 0.55 },   // still the precise pistol — but only one shot at a time
+  duals:  { stand: 15.5, crouch: 12.6, run: 30.0,   fire: 19, max: 105,  recov: 0.36 },
+  usp:    { stand: 11.0, crouch: 8.9,  run: 24.0,   fire: 20, max: 92,   recov: 0.38 },
+  glock:  { stand: 13.0, crouch: 10.6, run: 21.0,   fire: 20, max: 95,   recov: 0.36 },
   ssg:    { stand: 3.23, crouch: 3.03, run: 155.43, fire: 0,  max: 10,   recov: 0.50, scopedStill: 0.35, unscoped: 48 },
   // auto-snipers: pin-sharp FIRST scoped shot (scopedStill 0.35), but big per-shot bloom (fire) that
   // recovers slower than the 0.25s fire interval (recov 0.55 half-life) — so spamming stacks toward the
@@ -58,11 +63,27 @@ export const NADES = {
   molly: { name: "Molotov",    cost: 400, kind: "fire", side: "T" },
   inc:   { name: "Incendiary", cost: 600, kind: "fire", side: "CT" },
 };
-export const ARMOR = { kevlar: { name: "Kevlar", cost: 650 }, kevhelm: { name: "Kevlar + Helmet", cost: 1000 } };
+// helmet is not its own buy-menu entry in CS2 — it's the price you pay for "Kevlar + Helmet" when the
+// vest is already full.  See armorBuy() in game.js for the full rebuy rules.
+export const ARMOR = { kevlar: { name: "Kevlar", cost: 650 }, kevhelm: { name: "Kevlar + Helmet", cost: 1000 }, helmet: { name: "Helmet", cost: 350 } };
 
 // world scale: 1 three.js unit = 1 source unit. eye height ~64, distances in spec units.
 export const EYE_STAND = 64, EYE_CROUCH = 46, PLAYER_RADIUS = 16, GRAVITY = 800, JUMP_VEL = 260;
 export const BHOP_GAIN = 0.05, BHOP_MAX = 1.28;   // per-chained-jump speed gain (+5%), capped at +28% (CS-style bhop)
+
+/* ---- tickbase: backtrack + hide shots ----
+   Backtrack is a TICK budget, not a millisecond one — the server keeps a fixed number of ticks of
+   lag-compensation history and a cheat rewinds a target to one of those recorded ticks.  At 64 tick,
+   16 ticks = 250ms, which is CS2's practical unlag window. */
+export const TICK_RATE = 64, TICK = 1 / TICK_RATE;
+export const MAX_BACKTRACK_TICKS = 16;         // history depth every agent records (16 tk = 250ms)
+export const BT_SAMPLES = 5;                   // records actually evaluated per shot (cost control)
+/* Hide shots: firing normally PINS your real angles at the target for a moment, which is what makes a
+   desyncing player's head readable the instant they shoot.  Hiding a shot spends banked shift ticks so
+   the shot goes out while the fake angle is still up — but the bank only refills at a fraction of real
+   time, so you can hide taps, never a spray. */
+export const EXPOSE_TIME = 0.18;               // seconds a normal (un-hidden) shot exposes your real angles
+export const SHIFT_MAX_TICKS = 16, HIDE_SHOT_COST = 8, SHIFT_REGEN = 0.25;   // bank cap, cost per hidden shot, ticks banked per real tick
 
 // bullet penetration (autowall): weapon penPct doubles as penetration power.
 export const PEN = {
