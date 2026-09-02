@@ -6,7 +6,7 @@ import { WEAPONS, TEAM, JUMP_VEL } from './data.js';
 import { NODES, EDGES, RESCUE_ZONES, MAP_BOUNDS, astar, nearestNode, losClear } from './world.js';
 import { hitboxCenter, eyePos } from './agents.js';
 import { agents, GAME, clock } from './state.js';
-import { aimbotFire, moveAgent, meleeAttack, visibleTo, startReload, giveWeapon, hasAnyAmmo, autoStopScale } from './combat.js';
+import { aimbotFire, moveAgent, meleeAttack, visibleTo, startReload, giveWeapon, hasAnyAmmo, autoStopScale, applyFakeDuck } from './combat.js';
 import { liveHostages, armorBuy } from './game.js';
 
 export function botBuy(a) {
@@ -122,6 +122,7 @@ const needRepath = a => a.aiTimer <= 0 || (!a.aiPath.length && !a.aiPathFail);  
 
 export function botThink(a, dt) {
   if (!a.alive) return;
+  applyFakeDuck(a);              // a bot running fake duck is really ducked too — same stance, same cost
   healEdges();   // restore any temporary nav cuts whose cooldown elapsed (keeps CT<->T connected)
   a.aiTimer -= dt;
   a.speedScale = 1;

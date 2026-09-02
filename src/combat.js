@@ -57,13 +57,24 @@ function depenetrateAgents(a) {
   if (px === 0 && pz === 0) return false;
   a.pos.x += px; a.pos.z += pz; return true;
 }
-/* Fake duck is not free: holding the fake stance means spamming the duck key, and in CS that leaves you
-   crawling.  It is the trade the setting is FOR — a very hard read, bought with your mobility. */
-export const FAKEDUCK_SPEED = 0.34;
-export function fakeDuckScale(a) {
+/* ---- FAKE DUCK ----
+   The stance half of anti-aim, and the half that actually does the work.  Spamming duck leaves the
+   SERVER holding you ducked while the client still draws you standing, so your hitboxes sit ~18 units
+   under the model everyone is aiming at.
+   That means the real crouch has to go ON — hitboxes, eye height, bloom and speed all follow the truth
+   — while updateAgentVisual() renders the opposite stance and the fake carries a vertical offset to
+   match.  Forcing the stance is the whole mechanic: without it, fake duck was a rendering trick that
+   moved no hitbox and only mattered if desync happened to be on as well.
+   It is not free — a crouch you cannot stand out of, at just over half crouch speed. */
+export const FAKEDUCK_SPEED = 0.55;
+export function fakeDucking(a) {
   const aa = a.cheats && a.cheats.antiaim;
-  return (aa && aa.on && aa.fakeduck) ? FAKEDUCK_SPEED : 1;
+  return !!(aa && aa.on && aa.fakeduck && a.alive);
 }
+export function fakeDuckScale(a) { return fakeDucking(a) ? FAKEDUCK_SPEED : 1; }
+/* Called right after an agent's stance input is decided (the player's crouch key, a bot's AI) and
+   before anything reads it, so the forced duck holds for the rest of the frame — including the shot. */
+export function applyFakeDuck(a) { if (fakeDucking(a)) a.crouch = true; }
 export function moveAgent(a, dirXZ, dt, combat) {
   const w = WEAPONS[a.cur] || { run: 240 };
   let speed = (a.scoped && w.scopedRun) ? w.scopedRun : (w.run || 240);

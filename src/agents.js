@@ -226,15 +226,19 @@ export function updateAgentVisual(a) {
   // While `exposeT` is running the agent has just fired WITHOUT hiding the shot: to shoot you must be
   // aiming at your target, so your real angles are pinned and the fake stops protecting you. That is the
   // window every HvH player is actually reading — and what "hide shots" (tickbase) exists to close.
-  if (aa && aa.on && aa.desync && a.alive && !(a.exposeT > 0)) {
+  // desync OR fake duck: the sideways fake and the vertical one are separate tricks, and fake duck used
+  // to do nothing at all unless desync happened to be switched on beside it
+  if (aa && aa.on && (aa.desync || aa.fakeduck) && a.alive && !(a.exposeT > 0)) {
     // The fake body's offset IS the desync angle, made geometry: the old formula started at 16 units
     // even at 0°, so a desync slider set to nothing still hid you. It now scales from nothing at 0° to
     // about a body's width at a maxed 58°, which is what the slider claims to do.
-    const ang = (aa.desyncAngle || 0) * Math.PI / 180, side = a.desyncSide || 1, mag = 30 * Math.sin(ang) * side;
+    const ang = (aa.desyncAngle || 0) * Math.PI / 180, side = a.desyncSide || 1;
+    const mag = aa.desync ? 30 * Math.sin(ang) * side : 0;
     const off = a._desyncOff || (a._desyncOff = new THREE.Vector3());
     off.set(Math.cos(a.yaw) * mag, 0, -Math.sin(a.yaw) * mag);
     // FAKE DUCK: the stance the server has is not the one on screen, so the fake is at the wrong HEIGHT
     // as well as the wrong side — an un-resolved shot sails over a crouch or under a stand.
+    // the real stance is forced DOWN by applyFakeDuck, so the fake sits a stance-height above it
     if (aa.fakeduck) off.y = (a.crouch ? 1 : -1) * (EYE_STAND - EYE_CROUCH);
     if (mag === 0 && !aa.fakeduck) a._desyncOff = null;         // no angle and no fake duck is no fake at all
   } else a._desyncOff = null;

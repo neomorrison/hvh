@@ -8,7 +8,7 @@ import { agents, refs, GAME, vm, clock, keys, input } from './state.js';
 import { WALLS, NODES, EDGES, segAABB, losClear, penetrate } from './world.js';
 import { updateEffects, nadeProjectiles, shotLines } from './effects.js';
 import { setViewmodel, updateAgentVisual, updateBacktrackGhosts, hitboxCenter, eyePos } from './agents.js';
-import { manualFire, aimbotFire, fireWeaponCommon, fireDoubleTap, meleeAttack, moveAgent, computeBloom, startReload, finishReload, switchTo, selectBest, visibleTo, autoStopScale, recordTick, updateTickbase, beginSimFrame } from './combat.js';
+import { manualFire, aimbotFire, fireWeaponCommon, fireDoubleTap, meleeAttack, moveAgent, computeBloom, startReload, finishReload, switchTo, selectBest, visibleTo, autoStopScale, recordTick, updateTickbase, beginSimFrame, applyFakeDuck } from './combat.js';
 import { botThink } from './ai.js';
 import { verifyCheats } from './selftest.js';
 import {
@@ -147,6 +147,7 @@ function humanMove(dt) {
   const human = refs.human;
   // crouch is C, NOT Ctrl: Ctrl+W (duck + forward) closes the browser tab and a web page can't block it
   human.crouch = !!keys["KeyC"];
+  applyFakeDuck(human);            // fake duck holds the duck for you — the stance is real, the model is not
   human.walk = !!keys["ShiftLeft"];
   let f = 0, s = 0; if (keys["KeyW"]) f++; if (keys["KeyS"]) f--; if (keys["KeyA"]) s--; if (keys["KeyD"]) s++;
   const fwd = new THREE.Vector3(-Math.sin(human.yaw), 0, -Math.cos(human.yaw));

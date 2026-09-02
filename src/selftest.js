@@ -10,10 +10,10 @@ import { EYE_STAND } from './data.js';
 import { agents, refs, clock, GAME } from './state.js';
 import { WALLS } from './world.js';
 import { meshBackend } from './sourcemap.js';
-import { hitboxCenter, eyePos, defaultCheats, updateAgentVisual } from './agents.js';
+import { hitboxes, hitboxCenter, eyePos, defaultCheats, updateAgentVisual } from './agents.js';
 import {
   canShoot, beginSimFrame, aimbotFire, autoStopScale, updateTickbase,
-  resolveDesync, aaQuality, onShotFired, backtrackTicks, meleeAttack, fakeDuckScale,
+  resolveDesync, aaQuality, onShotFired, backtrackTicks, meleeAttack, fakeDuckScale, applyFakeDuck,
 } from './combat.js';
 import { shotLines, updateEffects, clearEffects } from './effects.js';
 
@@ -264,12 +264,24 @@ const CHECKS = [
     const flat = desync(f, { ...mild, fakeduck: false }).y;
     const ducked = desync(f, { ...mild, fakeduck: true }).y;
     const qUp = aaQuality(f); desync(f, { ...mild, fakeduck: false }); const qDown = aaQuality(f);
-    updateAgentVisual(f); const standScale = f.body.legs.scale.y;
-    desync(f, { ...mild, fakeduck: true }); updateAgentVisual(f); const fakeScale = f.body.legs.scale.y;
-    h.cheats.antiaim.on = true; h.cheats.antiaim.fakeduck = true; const slow = fakeDuckScale(h);
+    // THE mechanic: the real stance goes down (hitboxes, eye, bloom) while the model keeps standing
+    h.cheats.antiaim.on = true; h.cheats.antiaim.desync = false; h.cheats.antiaim.fakeduck = true;
+    h.crouch = false; applyFakeDuck(h);
+    const reallyDucked = h.crouch;
+    updateAgentVisual(h); const shownScale = h.body.legs.scale.y;
+    const headTop = Math.max(...hitboxes(h).filter(x => x.group === "head").map(x => x.maxY));
+    h.cheats.antiaim.fakeduck = false; h.crouch = false; applyFakeDuck(h);
+    const standTop = Math.max(...hitboxes(h).filter(x => x.group === "head").map(x => x.maxY));
+    const slowed = (h.cheats.antiaim.fakeduck = true, fakeDuckScale(h));
     h.cheats.antiaim.fakeduck = false; const full = fakeDuckScale(h);
-    return [flat === 0 && Math.abs(ducked) > 10 && qUp > qDown && fakeScale !== standScale && slow < 1 && full === 1,
-      `fake is ${Math.abs(ducked)}u off vertically · renders the other stance · costs the resolver (${qDown.toFixed(2)} → ${qUp.toFixed(2)}) · and ${Math.round((1 - slow) * 100)}% of your speed`];
+    // ...and it stands on its own: no desync, still a fake
+    const fdOnly = desync(f, { desync: false, desyncAngle: 0, fakeduck: true });
+    const lateral = fdOnly ? Math.hypot(fdOnly.x, fdOnly.z) : -1, vertical = fdOnly ? Math.abs(fdOnly.y) : 0;
+    return [flat === 0 && Math.abs(ducked) > 10 && qUp > qDown && reallyDucked && shownScale === 1
+            && headTop < standTop - 10 && slowed < 1 && full === 1 && lateral === 0 && vertical > 10,
+      `really ducks (head drops ${Math.round(standTop - headTop)}u) while the model stands · works with desync off ` +
+      `(${vertical}u vertical fake, no sideways) · costs the resolver (${qDown.toFixed(2)} → ${qUp.toFixed(2)}) and ` +
+      `${Math.round((1 - slowed) * 100)}% of your speed`];
   })],
   // ---------------- tickbase ----------------
   ["tickbase · backtrack", () => stage(300, (h, f) => {

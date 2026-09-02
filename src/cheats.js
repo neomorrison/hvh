@@ -11,6 +11,27 @@ import { showHint, updateHUDWeapons } from './hud.js';
 
 const $ = s => document.querySelector(s);
 
+/* ---- nav rail icons ----
+   Inline SVG rather than emoji: emoji render as the platform's own coloured glyphs, which on a dark
+   rail came out near-black and vanished.  These are drawn in `currentColor`, so the rail's own colour
+   and opacity decide how they look, and they scale cleanly at any size.
+   The anti-aim icon is the crouching-operator silhouette from the CS sticker — the pose is the whole
+   point of the tab it opens. */
+const ICONS = {
+  rage: `<svg viewBox="0 0 24 24" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="7.6"/><path d="M12 1.4v4.2M12 18.4v4.2M1.4 12h4.2M18.4 12h4.2"/></g><circle cx="12" cy="12" r="2.1"/></svg>`,
+  aa: `<svg viewBox="0 0 64 84" aria-hidden="true"><g fill="currentColor" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
+    <rect x="47.5" y="36" width="4.2" height="42" rx="1.4" stroke="none"/><rect x="45" y="21" width="9.5" height="21" rx="2" stroke="none"/><rect x="42.5" y="74.5" width="12" height="5" rx="2" stroke="none"/>
+    <path d="M24 47 L13 60 L9 70" stroke-width="11" fill="none"/><path d="M6 71.5 L16 71.5" stroke-width="9" fill="none"/>
+    <path d="M30 47 L35 60 L34 70" stroke-width="11" fill="none"/><path d="M30 71.5 L41 71.5" stroke-width="9" fill="none"/>
+    <path d="M20 49 C12 39 11 21 24 13 C31 8 41 7 47 10 L46 24 C39 25 33 30 29 38 L28 50 Z" stroke-width="1"/>
+    <path d="M15 20 C7 23 6 34 10 41 L18 37 Z" stroke-width="1"/>
+    <path d="M42 5 C51 2 58 7 58 14 C58 21 52 25 46 23 C41 21 39 16 39 12 Z" stroke="none"/>
+    <path d="M38 27 L45 33" stroke-width="6.5" fill="none"/></g></svg>`,
+  tick: `<svg viewBox="0 0 24 24" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="13.5" r="8.2"/><path d="M12 9v4.5l3 2"/><path d="M9.2 1.6h5.6M12 1.6v3.3"/></g></svg>`,
+  vis: `<svg viewBox="0 0 24 24" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M1.7 12S5.9 5.2 12 5.2 22.3 12 22.3 12 18.1 18.8 12 18.8 1.7 12 1.7 12Z"/><circle cx="12" cy="12" r="3.1"/></g></svg>`,
+  cfg: `<svg viewBox="0 0 24 24" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M3.2 4.7A1.5 1.5 0 0 1 4.7 3.2h10.6l5.5 5.5v10.6a1.5 1.5 0 0 1-1.5 1.5H4.7a1.5 1.5 0 0 1-1.5-1.5Z"/><path d="M7.4 3.2v6h8V3.4"/><path d="M7.4 20.8v-7.4h9.2v7.4"/></g></svg>`,
+};
+
 /* which tab is open survives a rebuild — toggling a switch that rebuilds the menu
    must not throw you back to the first tab */
 let activeTab = "rage";
@@ -18,7 +39,7 @@ let activeTab = "rage";
 function tabs() {
   const c = refs.human.cheats;
   return [
-    { id: "rage", icon: "🎯", name: "Rage", groups: [
+    { id: "rage", icon: ICONS.rage, name: "Rage", groups: [
       { title: "Aimbot", rows: [
         sw("Aimbot enabled", () => c.aimbot.on, v => c.aimbot.on = v, "F1"),
         sel("Target", ["crosshair", "distance", "lowhp"], () => c.aimbot.target, v => c.aimbot.target = v, true),
@@ -60,7 +81,7 @@ function tabs() {
              `player · <b>onshot</b> is near-blind between exposures and excellent right after one.`),
       ] },
     ] },
-    { id: "aa", icon: "🌀", name: "Anti-Aim", groups: [
+    { id: "aa", icon: ICONS.aa, name: "Anti-Aim", groups: [
       { title: "Angles", rows: [
         sw("Anti-aim enabled", () => c.antiaim.on, v => c.antiaim.on = v, "F5"),
         sel("Yaw", ["back", "sideways", "spin", "jitter", "sway", "rand"], () => c.antiaim.yaw, v => c.antiaim.yaw = v, true),
@@ -75,8 +96,9 @@ function tabs() {
         note(`The desync angle is the fake body's offset made geometry — 0° really is no fake at all now, and 58° swings ` +
              `it about a body's width off you. <b>freestanding</b> looks at the map and puts the fake where the nearest ` +
              `enemy can see it, leaving the real you behind the corner, so an un-resolved shot goes into the wall. ` +
-             `<b>fake duck</b> renders the stance you are not in, so the fake is at the wrong <b>height</b> too — a bad ` +
-             `read goes over a crouch or under a stand.`),
+             `<b>fake duck</b> needs neither of those: it holds you really ` +
+             `ducked while the model keeps standing, so your hitboxes sit a stance-height <b>below</b> whatever ` +
+             `anyone is aiming at. It costs you the ability to stand up, and most of your speed.`),
       ] },
       { title: "What breaks it", rows: [
         note(`Firing <b>pins your real angles</b> for a moment — that exposure is the read every resolver actually lives ` +
@@ -84,7 +106,7 @@ function tabs() {
              `cost a resolver more, so jitter/spin at 58° is the hardest read and a plain back yaw the easiest.`),
       ] },
     ] },
-    { id: "tick", icon: "⏱", name: "Tickbase", groups: [
+    { id: "tick", icon: ICONS.tick, name: "Tickbase", groups: [
       { title: "Backtrack · hide shots · double tap", rows: [
         rng("Backtrack (ticks)", 0, MAX_BACKTRACK_TICKS, () => c.tickbase.backtrack, v => c.tickbase.backtrack = v, t => `${t} tk · ${Math.round(t * 1000 / TICK_RATE)}ms`),
         sw("Hide shots (fire without pinning your real angle)", () => c.tickbase.hideShots, v => c.tickbase.hideShots = v),
@@ -97,7 +119,7 @@ function tabs() {
              `state machine rather than a next-attack check, so there is nothing to shift past, and no HvH cheat offers it.`),
       ] },
     ] },
-    { id: "visuals", icon: "👁", name: "Visuals", groups: [
+    { id: "visuals", icon: ICONS.vis, name: "Visuals", groups: [
       { title: "ESP", rows: [
         sw("ESP enabled", () => c.visuals.esp, v => c.visuals.esp = v, "F7"),
         sw("Boxes", () => c.visuals.boxes, v => c.visuals.boxes = v, null, true),
@@ -127,7 +149,7 @@ function tabs() {
         sw("Backtrack ghost (the tick a rewound shot landed on)", () => c.visuals.backtrackGhost, v => c.visuals.backtrackGhost = v),
       ] },
     ] },
-    { id: "config", icon: "💾", name: "Config", groups: [
+    { id: "config", icon: ICONS.cfg, name: "Config", groups: [
       { title: "Config", rows: [
         btns([
           ["💾 Save config", () => { saveConfig(); showHint("Config saved"); }],
