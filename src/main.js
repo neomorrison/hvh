@@ -8,7 +8,7 @@ import { agents, refs, GAME, vm, clock, keys, input } from './state.js';
 import { WALLS, NODES, EDGES, segAABB, losClear, penetrate } from './world.js';
 import { updateEffects, nadeProjectiles, shotLines } from './effects.js';
 import { setViewmodel, updateAgentVisual, updateBacktrackGhosts, hitboxCenter, eyePos } from './agents.js';
-import { manualFire, aimbotFire, fireWeaponCommon, fireDoubleTap, meleeAttack, moveAgent, computeBloom, startReload, finishReload, switchTo, selectBest, visibleTo, autoStopScale, recordTick, updateTickbase, beginSimFrame, applyFakeDuck } from './combat.js';
+import { manualFire, aimbotFire, fireWeaponCommon, fireDoubleTap, meleeAttack, moveAgent, computeBloom, startReload, finishReload, switchTo, selectBest, visibleTo, autoStopScale, baseMoveSpeed, recordTick, updateTickbase, beginSimFrame, applyFakeDuck } from './combat.js';
 import { botThink } from './ai.js';
 import { verifyCheats } from './selftest.js';
 import {
@@ -92,6 +92,13 @@ addEventListener('keydown', e => {
   if (e.code === "Digit2") { human.equippedNade = null; if (human.slotSecondary) switchTo(human, human.slotSecondary); } // 2 = pistol/secondary
   if (e.code === "Digit3") { human.equippedNade = null; switchTo(human, 'knife'); }                                    // 3 = knife
   if (e.code === "Digit4" || e.code === "KeyG") { equipGrenade(); }                                                    // 4 = grenade
+  {
+    const aaK = human.cheats.antiaim || {};
+    if (aaK.fakeduck && aaK.fakeduckMode === "toggle" && e.code === (aaK.fakeduckKey || "KeyX") && !e.repeat) {
+      human._fdToggle = !human._fdToggle;
+      showHint("Fake duck " + (human._fdToggle ? "ON — you are ducked" : "OFF"));
+    }
+  }
   if (e.code === "KeyR") { startReload(human); }
   if (e.code === "KeyE") { tryRescueInteract(human); }
   if (e.code === "KeyV") {
@@ -147,7 +154,11 @@ function humanMove(dt) {
   const human = refs.human;
   // crouch is C, NOT Ctrl: Ctrl+W (duck + forward) closes the browser tab and a web page can't block it
   human.crouch = !!keys["KeyC"];
-  applyFakeDuck(human);            // fake duck holds the duck for you — the stance is real, the model is not
+  // FAKE DUCK BIND — held by default. It forces a real crouch, so it is deliberately something you
+  // press for a peek rather than a switch you leave on and then wonder why you are walking so slowly.
+  const aaH = human.cheats.antiaim || {};
+  human._fdActive = (aaH.fakeduckMode === "toggle") ? !!human._fdToggle : !!keys[aaH.fakeduckKey || "KeyX"];
+  applyFakeDuck(human);            // the stance it forces is real; the model keeps standing
   human.walk = !!keys["ShiftLeft"];
   let f = 0, s = 0; if (keys["KeyW"]) f++; if (keys["KeyS"]) f--; if (keys["KeyA"]) s--; if (keys["KeyD"]) s++;
   const fwd = new THREE.Vector3(-Math.sin(human.yaw), 0, -Math.cos(human.yaw));
@@ -480,6 +491,7 @@ window.HVH = {
   deploy, deploySource, editorDebug, verifyCheats,
   fastForward(secs) { const dt = 1 / 60; let t = 0; while (t < secs) { step(dt); t += dt; } return { phase: GAME.phase, score: [GAME.scoreCT, GAME.scoreT] }; },
   computeBloom(a) { return computeBloom(a || refs.human); },
+  baseMoveSpeed(a, combat) { return baseMoveSpeed(a || refs.human, combat); },
   testGrenade() { refs.human.nades = { he: 1, flash: 1 }; equipGrenade(); const eq = refs.human.equippedNade; const before = nadeProjectiles.length; const ok = throwNade(refs.human, eq); return { equipped: eq, threw: ok, projectilesBefore: before, projectilesAfter: nadeProjectiles.length, remaining: refs.human.nades[eq] }; },
   testPenetration() {
     const saved = WALLS.splice(0, WALLS.length);

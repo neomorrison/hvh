@@ -13,7 +13,7 @@ import { meshBackend } from './sourcemap.js';
 import { hitboxes, hitboxCenter, eyePos, defaultCheats, updateAgentVisual } from './agents.js';
 import {
   canShoot, beginSimFrame, aimbotFire, autoStopScale, updateTickbase,
-  resolveDesync, aaQuality, onShotFired, backtrackTicks, meleeAttack, fakeDuckScale, applyFakeDuck,
+  resolveDesync, aaQuality, onShotFired, backtrackTicks, meleeAttack, fakeDuckScale, applyFakeDuck, aimCfg,
 } from './combat.js';
 import { shotLines, updateEffects, clearEffects } from './effects.js';
 
@@ -83,6 +83,9 @@ function hitRate(human, foe, n) {
 function desync(foe, opts) {
   Object.assign(foe.cheats.antiaim, { on: true, desync: true, yaw: 'jitter', jitter: 55, pitch: 'down', desyncAngle: 58, mode: 'at_target', fakeduck: false }, opts || {});
   foe.alive = true; foe.hp = 100; foe.body.g.visible = true;   // a corpse has no fake — updateAgentVisual skips the dead
+  // yaw 0 swings the fake along ±x, i.e. ACROSS the line of sight from the staged shooter at the
+  // origin. A fake that swings along the view axis barely displaces anything and hides nothing.
+  foe.yaw = 0;
   foe.exposeT = 0; foe._lastExpose = null; foe._sideStamp = 0; foe.desyncSide = 1;
   updateAgentVisual(foe);
   return foe._desyncOff;
@@ -164,9 +167,47 @@ const CHECKS = [
   ["aimbot · safepoint", () => stage(260, (h, f) => {
     desync(f, { desyncAngle: 24 });
     h.cheats.resolver.on = false;                  // resolver can never win → only a safepoint can land
-    h.cheats.aimbot.safepoint = false; const plain = hitRate(h, f, 120);
-    h.cheats.aimbot.safepoint = true; beginSimFrame(); const safe = hitRate(h, f, 120);
-    return [plain.rate === 0 && safe.rate > 0.5, `no safepoint vs an unresolvable desync: ${(plain.rate * 100) | 0}% · safepoint: ${(safe.rate * 100) | 0}%`];
+    h.cheats.aimbot.priority = "head";             // the head is where a lost read actually costs you
+    h.cheats.aimbot.safepoint = false; beginSimFrame(); const plain = hitRate(h, f, 150);
+    h.cheats.aimbot.safepoint = true; beginSimFrame(); const safe = hitRate(h, f, 150);
+    return [plain.rate < 0.25 && safe.rate > plain.rate + 0.4,
+      `head vs an unresolvable desync — no safepoint: ${(plain.rate * 100) | 0}% · safepoint: ${(safe.rate * 100) | 0}%`];
+  })],
+  ["anti-aim · a lost read costs the head, not the body", () => stage(300, (h, f) => {
+    // A desync rotates the body about the spine: the head is out at the end of that lever and swings
+    // clear, the stomach sits on the axis and its real and fake boxes still overlap. That overlap is
+    // the safe point every HvH player body-aims for — so a blind body shot should still land.
+    desync(f, { desyncAngle: 58 });
+    h.cheats.resolver.on = false; h.cheats.aimbot.safepoint = false;
+    h.cheats.aimbot.forceBody = false; h.cheats.aimbot.priority = "head"; beginSimFrame();
+    const head = hitRate(h, f, 150);
+    h.cheats.aimbot.forceBody = true; beginSimFrame();                 // stomach / chest / legs
+    const body = hitRate(h, f, 150);
+    return [head.rate < 0.25 && body.rate > 0.6,
+      `blind head shot lands ${(head.rate * 100) | 0}% · blind body shot lands ${(body.rate * 100) | 0}%`];
+  })],
+  ["aimbot · per-weapon overrides", () => stage(300, (h, f) => {
+    h.cheats.aimbot.weapons = {};
+    h.cheats.aimbot.hitchance = 40; h.cheats.aimbot.minDmg = 20; h.cheats.aimbot.priority = "head";
+    h.weapons.deagle = { ammo: 7, reserve: 21 };
+    h.cur = 'usp'; const master = aimCfg(h);
+    h.cheats.aimbot.weapons.usp = { hitchance: 95, priority: "chest" };     // pin the USP only
+    const pinned = aimCfg(h);
+    h.cur = 'deagle'; const unpinned = aimCfg(h);
+    h.cheats.aimbot.hitchance = 70;                                        // moving the master...
+    const followed = aimCfg(h);                                            // ...moves the gun that isn't pinned
+    h.cur = 'usp'; const stillPinned = aimCfg(h);                          // ...and not the one that is
+    // and the gate really uses it — out at a range where 100% is not a certainty (at 300u a chest shot is)
+    f.pos.set(f.pos.x, f.pos.y, -1200);
+    h.cheats.aimbot.weapons.usp.hitchance = 100; beginSimFrame(); const held = canShoot(h).ok;
+    h.cheats.aimbot.weapons.usp.hitchance = 0; beginSimFrame(); const taken = canShoot(h).ok;
+    h.cheats.aimbot.weapons = {};
+    return [master.hitchance === 40 && master.priority === "head" && !master.overridden
+            && pinned.hitchance === 95 && pinned.priority === "chest" && pinned.minDmg === 20 && pinned.overridden
+            && unpinned.hitchance === 40 && followed.hitchance === 70 && stillPinned.hitchance === 95
+            && !held && taken,
+      `master 40% → USP pinned at 95% while the Deagle follows the master to 70% · min damage still ` +
+      `inherited (${pinned.minDmg}) · the weapon's gate is what canShoot uses`];
   })],
   // ---------------- autowall ----------------
   ["autowall", () => stage(300, (h, f) => {
@@ -264,24 +305,30 @@ const CHECKS = [
     const flat = desync(f, { ...mild, fakeduck: false }).y;
     const ducked = desync(f, { ...mild, fakeduck: true }).y;
     const qUp = aaQuality(f); desync(f, { ...mild, fakeduck: false }); const qDown = aaQuality(f);
-    // THE mechanic: the real stance goes down (hitboxes, eye, bloom) while the model keeps standing
+    // IT IS A BIND. Armed but not held changes nothing — that distinction is the whole fix for
+    // "the last update made me walk really slow": a forced crouch you cannot release is not a setting.
     h.cheats.antiaim.on = true; h.cheats.antiaim.desync = false; h.cheats.antiaim.fakeduck = true;
-    h.crouch = false; applyFakeDuck(h);
+    h.crouch = false; h._fdActive = false; applyFakeDuck(h);
+    const armedOnly = h.crouch, armedSpeed = fakeDuckScale(h);
+    // ...held, the real stance goes down (hitboxes, eye, bloom) while the model keeps standing
+    h._fdActive = true; h.crouch = false; applyFakeDuck(h);
     const reallyDucked = h.crouch;
     updateAgentVisual(h); const shownScale = h.body.legs.scale.y;
     const headTop = Math.max(...hitboxes(h).filter(x => x.group === "head").map(x => x.maxY));
+    const slowed = fakeDuckScale(h);
     h.cheats.antiaim.fakeduck = false; h.crouch = false; applyFakeDuck(h);
     const standTop = Math.max(...hitboxes(h).filter(x => x.group === "head").map(x => x.maxY));
-    const slowed = (h.cheats.antiaim.fakeduck = true, fakeDuckScale(h));
-    h.cheats.antiaim.fakeduck = false; const full = fakeDuckScale(h);
+    const full = fakeDuckScale(h);
+    h._fdActive = false;
     // ...and it stands on its own: no desync, still a fake
     const fdOnly = desync(f, { desync: false, desyncAngle: 0, fakeduck: true });
     const lateral = fdOnly ? Math.hypot(fdOnly.x, fdOnly.z) : -1, vertical = fdOnly ? Math.abs(fdOnly.y) : 0;
     return [flat === 0 && Math.abs(ducked) > 10 && qUp > qDown && reallyDucked && shownScale === 1
-            && headTop < standTop - 10 && slowed < 1 && full === 1 && lateral === 0 && vertical > 10,
-      `really ducks (head drops ${Math.round(standTop - headTop)}u) while the model stands · works with desync off ` +
-      `(${vertical}u vertical fake, no sideways) · costs the resolver (${qDown.toFixed(2)} → ${qUp.toFixed(2)}) and ` +
-      `${Math.round((1 - slowed) * 100)}% of your speed`];
+            && !armedOnly && armedSpeed === 1 && headTop < standTop - 10 && slowed < 1 && full === 1
+            && lateral === 0 && vertical > 10,
+      `armed does nothing until the key is held · held it really ducks (head drops ${Math.round(standTop - headTop)}u) ` +
+      `while the model stands · works with desync off (${vertical}u vertical fake, no sideways) · costs the resolver ` +
+      `(${qDown.toFixed(2)} → ${qUp.toFixed(2)}) and ${Math.round((1 - slowed) * 100)}% of your speed`];
   })],
   // ---------------- tickbase ----------------
   ["tickbase · backtrack", () => stage(300, (h, f) => {

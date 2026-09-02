@@ -4,7 +4,7 @@
    pane of grouped settings at a time on the right, and the config controls on
    their own tab instead of glued to the bottom of a 200-row scroll.          */
 import { renderer } from './core.js';
-import { MAX_BACKTRACK_TICKS, TICK_RATE, SHIFT_MAX_TICKS, HIDE_SHOT_COST } from './data.js';
+import { MAX_BACKTRACK_TICKS, TICK_RATE, SHIFT_MAX_TICKS, HIDE_SHOT_COST, WEAPONS } from './data.js';
 import { refs, GAME } from './state.js';
 import { defaultCheats } from './agents.js';
 import { showHint, updateHUDWeapons } from './hud.js';
@@ -32,6 +32,11 @@ const ICONS = {
   cfg: `<svg viewBox="0 0 24 24" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M3.2 4.7A1.5 1.5 0 0 1 4.7 3.2h10.6l5.5 5.5v10.6a1.5 1.5 0 0 1-1.5 1.5H4.7a1.5 1.5 0 0 1-1.5-1.5Z"/><path d="M7.4 3.2v6h8V3.4"/><path d="M7.4 20.8v-7.4h9.2v7.4"/></g></svg>`,
 };
 
+/* Which weapon the Rage tab is editing. "global" edits the master values; picking a gun edits that
+   gun's overrides of them. UI state only — nothing here is saved with the config. */
+const WEP_KEYS = Object.keys(WEAPONS).filter(k => !WEAPONS[k].melee);
+let selWeapon = "global";
+
 /* which tab is open survives a rebuild — toggling a switch that rebuilds the menu
    must not throw you back to the first tab */
 let activeTab = "rage";
@@ -52,19 +57,11 @@ function tabs() {
         sw("Auto revolver (pre-cock R8)", () => c.aimbot.autoRevolver, v => c.aimbot.autoRevolver = v, null, true),
       ] },
       { title: "Target selection", rows: [
-        sel("Hitbox priority", ["head", "body"], () => c.aimbot.priority === "head" ? "head" : "body", v => c.aimbot.priority = v === "head" ? "head" : "chest"),
         sw("Force body aim (baim)", () => c.aimbot.forceBody, v => c.aimbot.forceBody = v, "F2"),
         sw("Baim if lethal (body when it kills)", () => c.aimbot.baimLethal, v => c.aimbot.baimLethal = v, null, true),
         sw("Safepoint", () => c.aimbot.safepoint, v => c.aimbot.safepoint = v),
       ] },
-      { title: "Accuracy gate", rows: [
-        rng("Min hit chance", 0, 100, () => c.aimbot.hitchance, v => c.aimbot.hitchance = v, v => v + "%"),
-        rng("Min damage", 1, 101, () => c.aimbot.minDmg, v => c.aimbot.minDmg = v),
-        note(`Hit chance is measured, not estimated: the spread cone is traced against the hitbox you're aiming at ` +
-             `and scaled by how much of that hitbox is out of cover — then <b>the bullet is rolled down the same cone</b>. ` +
-             `So <b>100% means 100%</b>: the whole cone has to fit inside the hitbox with the whole silhouette exposed, ` +
-             `which is rare and stays rare. When it does fire, the only thing left that can beat it is the resolver.`),
-      ] },
+      { title: "Accuracy gate · per weapon", rows: accuracyRows(c) },
       { title: "Autowall / penetration", rows: [
         sw("Autowall enabled", () => c.autowall.on, v => c.autowall.on = v, "F4"),
         rng("Autowall min dmg", 1, 100, () => c.autowall.minDmg, v => c.autowall.minDmg = v, null, true),
@@ -93,12 +90,16 @@ function tabs() {
         rng("Desync angle", 0, 58, () => c.antiaim.desyncAngle, v => c.antiaim.desyncAngle = v, v => v + "°", true),
         sel("Side", ["at_target", "freestanding"], () => c.antiaim.mode, v => c.antiaim.mode = v, true),
         sw("Fake duck", () => c.antiaim.fakeduck, v => c.antiaim.fakeduck = v, null, true),
+        keybind("Fake duck key", () => c.antiaim.fakeduckKey || "KeyX", v => c.antiaim.fakeduckKey = v, true),
+        sel("Fake duck mode", ["hold", "toggle"], () => c.antiaim.fakeduckMode || "hold", v => c.antiaim.fakeduckMode = v, true),
         note(`The desync angle is the fake body's offset made geometry — 0° really is no fake at all now, and 58° swings ` +
              `it about a body's width off you. <b>freestanding</b> looks at the map and puts the fake where the nearest ` +
              `enemy can see it, leaving the real you behind the corner, so an un-resolved shot goes into the wall. ` +
              `<b>fake duck</b> needs neither of those: it holds you really ` +
              `ducked while the model keeps standing, so your hitboxes sit a stance-height <b>below</b> whatever ` +
-             `anyone is aiming at. It costs you the ability to stand up, and most of your speed.`),
+             `anyone is aiming at. It is a <b>bind</b> — the switch above only arms it, and it engages while the key ` +
+             `is held — because while it is on you are genuinely crouched and genuinely slow. Press it for a peek; ` +
+             `don't leave it on and wonder why you are walking through treacle.`),
       ] },
       { title: "What breaks it", rows: [
         note(`Firing <b>pins your real angles</b> for a moment — that exposure is the read every resolver actually lives ` +
@@ -166,6 +167,53 @@ function tabs() {
   ];
 }
 
+/* Hit chance, min damage and hitbox priority, for whichever weapon the selector is on.
+   "global" edits the master. A gun shows an override switch per setting: off, the row displays the
+   master value greyed out and follows it; on, the weapon gets its own copy and stops following.
+   Only overridden keys are stored, so the master still moves everything you have not pinned. */
+function accuracyRows(c) {
+  const wep = () => (c.aimbot.weapons || (c.aimbot.weapons = {}));
+  const pick = sel("Weapon", ["global", ...WEP_KEYS], () => selWeapon, v => { selWeapon = v; buildCheatMenu(); });
+  const hc = (get, set, sub, dim) => rng("Min hit chance", 0, 100, get, set, v => v + "%", sub, dim);
+  const md = (get, set, sub, dim) => rng("Min damage", 1, 101, get, set, null, sub, dim);
+  const pr = (get, set, sub, dim) => sel("Hitbox priority", ["head", "body"], get, set, sub, dim);
+  const explain = note(`Hit chance is measured, not estimated: the spread cone is traced against the hitbox you're aiming ` +
+    `at and scaled by how much of that hitbox is out of cover — then <b>the bullet is rolled down the same cone</b>. ` +
+    `So <b>100% means 100%</b>: the whole cone has to fit inside the hitbox with the whole silhouette exposed, which is ` +
+    `rare and stays rare. When it does fire, the only thing left that can beat it is the resolver.`);
+  if (selWeapon === "global") return [
+    pick,
+    hc(() => c.aimbot.hitchance, v => c.aimbot.hitchance = v),
+    md(() => c.aimbot.minDmg, v => c.aimbot.minDmg = v),
+    pr(() => c.aimbot.priority === "head" ? "head" : "body", v => c.aimbot.priority = v === "head" ? "head" : "chest"),
+    note(`These are the <b>master</b> values — every weapon uses them until you pick a gun above and override it.`),
+    explain,
+  ];
+  const W = selWeapon, name = WEAPONS[W] ? WEAPONS[W].name : W;
+  const bag = () => (wep()[W] || (wep()[W] = {}));
+  const has = k => !!(wep()[W] && wep()[W][k] != null);
+  const masters = { hitchance: () => c.aimbot.hitchance, minDmg: () => c.aimbot.minDmg, priority: () => c.aimbot.priority };
+  const setOvr = (k, on) => {
+    if (on) bag()[k] = masters[k]();
+    else { const o = wep()[W]; if (o) { delete o[k]; if (!Object.keys(o).length) delete wep()[W]; } }
+    buildCheatMenu();
+  };
+  const val = k => (has(k) ? wep()[W][k] : masters[k]());
+  return [
+    pick,
+    sw(`Min hit chance override`, () => has("hitchance"), v => setOvr("hitchance", v)),
+    hc(() => val("hitchance"), v => { if (has("hitchance")) bag().hitchance = v; }, true, !has("hitchance")),
+    sw(`Min damage override`, () => has("minDmg"), v => setOvr("minDmg", v)),
+    md(() => val("minDmg"), v => { if (has("minDmg")) bag().minDmg = v; }, true, !has("minDmg")),
+    sw(`Hitbox priority override`, () => has("priority"), v => setOvr("priority", v)),
+    pr(() => val("priority") === "head" ? "head" : "body", v => { if (has("priority")) bag().priority = v === "head" ? "head" : "chest"; }, true, !has("priority")),
+    note(`Editing <b>${name}</b>. A setting with its override off is greyed out and simply follows the master, so ` +
+         `raising the master still raises every gun you have not pinned. Turn one on and this weapon keeps its own ` +
+         `value from then on.`),
+    explain,
+  ];
+}
+
 export function buildCheatMenu() {
   const body = $("#cheatBody");
   const list = tabs();
@@ -208,9 +256,9 @@ function sw(label, get, set, key, sub) {
 }
 /* A slider that draws its own value on the bar, the way cheat menus do — the number rides the edge of
    the fill instead of taking a column of its own, so a 30-row pane still fits two to a screen. */
-function rng(label, min, max, get, set, fmt, sub) {
+function rng(label, min, max, get, set, fmt, sub, dim) {
   const show = v => String(fmt ? fmt(v) : v);
-  const row = document.createElement("div"); row.className = "crow col" + (sub ? " sub" : "");
+  const row = document.createElement("div"); row.className = "crow col" + (sub ? " sub" : "") + (dim ? " dim" : "");
   row.innerHTML = `<div class="slab">${label}</div><div class="sl"><div class="fill"></div><span class="sv"></span></div>`;
   const track = row.querySelector(".sl"), fill = row.querySelector(".fill"), sv = row.querySelector(".sv");
   const paint = () => {
@@ -238,10 +286,34 @@ function col(label, get, set, sub) {
   row.innerHTML = `<span class="clabel">${label}</span><input type="color" value="${get()}">`;
   const i = row.querySelector("input"); i.oninput = () => set(i.value); row._sync = () => i.value = get(); return row;
 }
-function sel(label, opts, get, set, sub) {
-  const row = document.createElement("div"); row.className = "crow col" + (sub ? " sub" : "");
+function sel(label, opts, get, set, sub, dim) {
+  const row = document.createElement("div"); row.className = "crow col" + (sub ? " sub" : "") + (dim ? " dim" : "");
   row.innerHTML = `<div class="slab">${label}</div><div class="selwrap"><select>${opts.map(o => `<option ${o === get() ? 'selected' : ''}>${o}</option>`).join("")}</select></div>`;
   const s = row.querySelector("select"); s.onchange = () => set(s.value); row._sync = () => s.value = get(); return row;
+}
+/* A key bind: click it, press the key you want. The capture listener runs in the CAPTURE phase and
+   stops the event, so the game's own keydown handler never sees the key you are binding. */
+function keybind(label, get, set, sub) {
+  const row = document.createElement("div"); row.className = "crow" + (sub ? " sub" : "");
+  row.innerHTML = `<span class="clabel">${label}</span><button class="kbind"></button>`;
+  const btn = row.querySelector("button");
+  const show = () => { btn.textContent = keyName(get()); btn.classList.remove("cap"); };
+  btn.onclick = () => {
+    btn.textContent = "press a key…"; btn.classList.add("cap");
+    const grab = e => {
+      e.preventDefault(); e.stopPropagation();
+      removeEventListener("keydown", grab, true);
+      if (e.code !== "Escape") set(e.code);
+      show();
+    };
+    addEventListener("keydown", grab, true);
+  };
+  row._sync = show; show(); return row;
+}
+function keyName(code) {
+  if (!code) return "—";
+  return String(code).replace(/^Key/, "").replace(/^Digit/, "").replace(/^Arrow/, "").replace(/^Numpad/, "Num ")
+    .replace(/^Control/, "Ctrl ").replace(/^(Shift|Alt|Meta)/, "$1 ").replace(/Left$/, "L").replace(/Right$/, "R") || String(code);
 }
 function btns(defs) {
   const bar = document.createElement("div"); bar.className = "cbtns";

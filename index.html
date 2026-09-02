@@ -161,6 +161,9 @@
   .crow .clabel { flex:1; cursor:pointer; }
   .crow .keytag { font-size:10px; color:#767676; flex:none; }
   .crow.sub { padding-left:19px; }                              /* an option that only means something under the one above it */
+  /* a per-weapon row with its override off: it shows the master value and follows it */
+  .crow.dim { opacity:.42; }
+  .crow.dim .sl, .crow.dim select, .crow.dim input { pointer-events:none; }
   /* square check box, filled when on */
   .chk { position:relative; width:11px; height:11px; flex:none; cursor:pointer; }
   .chk input { position:absolute; opacity:0; width:0; height:0; }
@@ -178,6 +181,10 @@
   .selwrap::after { content:""; position:absolute; right:7px; top:50%; margin-top:-2px; border:4px solid transparent; border-top-color:#9a9a9a; pointer-events:none; }
   .crow select { width:100%; appearance:none; -webkit-appearance:none; background:#242424; color:#cfcfcf; border:1px solid #4c4c4c;
                  border-radius:1px; padding:3px 22px 3px 7px; font:inherit; font-size:12px; cursor:pointer; pointer-events:auto; }
+  .kbind { pointer-events:auto; background:#242424; color:#cfcfcf; border:1px solid #4c4c4c; border-radius:1px;
+           font:inherit; font-size:11px; padding:2px 9px; min-width:54px; cursor:pointer; }
+  .kbind:hover { border-color:#8ee88f; }
+  .kbind.cap { border-color:#8ee88f; color:#8ee88f; }
   .crow input[type=color] { background:#242424; border:1px solid #4c4c4c; border-radius:1px; width:38px; height:18px; padding:1px; pointer-events:auto; }
   .cnote { font-size:11px; color:#8f8f8f; line-height:1.55; background:#2a2a2a; border-left:2px solid #4fae56; border-radius:0 2px 2px 0; padding:7px 9px; }
   .cnote b { color:#9bef9c; font-weight:normal; }

@@ -8,7 +8,7 @@ import { WEAPONS, NADES, TEAM, SHIFT_MAX_TICKS, HIDE_SHOT_COST, dtTicks } from '
 import { WALLS, RESCUE_ZONES, MAP_BOUNDS, losClear } from './world.js';
 import { hitboxCenter, eyePos } from './agents.js';
 import { agents, refs, GAME, vm } from './state.js';
-import { computeBloom, canShoot, visibleTo } from './combat.js';
+import { computeBloom, canShoot, visibleTo, aimCfg } from './combat.js';
 import { liveHostages } from './game.js';
 
 const $ = s => document.querySelector(s);
@@ -198,13 +198,15 @@ export function updateHitChanceHUD() {
   if (!human || !human.alive || !v || !v.hitchance || anyPanelOpen()) { el.style.display = "none"; return; }
   const cs = canShoot(human);
   if (!cs.have || !cs.tgt) { el.style.display = "none"; return; }
-  const pct = Math.round(cs.hitChance * 100), need = human.cheats.aimbot.hitchance || 0;
+  const cfg = aimCfg(human);
+  const pct = Math.round(cs.hitChance * 100), need = cfg.hitchance;
   el.style.display = "block";
   el.className = pct >= need ? "ok" : "";
   el.innerHTML = `<b>${pct}%</b> ${cs.group} · ${Math.round(cs.dmg)} dmg` +
     (cs.exposure < 0.999 ? ` · ${Math.round(cs.exposure * 100)}% exposed` : "") +
     (cs.btTicks ? ` · bt ${cs.btTicks}tk` : "") +
-    (pct >= need ? "" : ` · need ${need}%`);
+    (pct >= need ? "" : ` · need ${need}%`) +
+    (cfg.overridden ? ` · ${WEAPONS[human.cur] ? WEAPONS[human.cur].name : human.cur} cfg` : "");
 }
 export function updateScopeOverlay() {
   const human = refs.human; const ov = document.getElementById('scopeOverlay');

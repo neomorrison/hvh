@@ -111,12 +111,20 @@ export function defaultCheats(aggressive) {
     // bloom cone actually makes the shot. 40% / 30 min damage are the "average values that work" —
     // strong enough that a bot trades properly, loose enough that it still shoots on a pistol round.
     aimbot: { on: aggressive, fov: 180, hitchance: aggressive ? 40 : 50, minDmg: aggressive ? 30 : 1, silent: true,
-      autoShoot: aggressive, autoScope: true, autoStop: aggressive, autoKnife: aggressive, autoRevolver: true, target: "crosshair", priority: "head", forceBody: false, baimLethal: false, safepoint: false },
+      autoShoot: aggressive, autoScope: true, autoStop: aggressive, autoKnife: aggressive, autoRevolver: true, target: "crosshair", priority: "head", forceBody: false, baimLethal: false, safepoint: false,
+      // hitchance/minDmg/priority above are the MASTER values. `weapons` holds per-weapon overrides —
+      // only the keys a weapon actually overrides are stored, so raising the master still moves every
+      // gun you have not explicitly pinned. See aimCfg().
+      weapons: {} },
     autowall: { on: aggressive, minDmg: 30 },
     // strength is the resolver's ceiling, not its answer — see resolveDesync(): a target's anti-aim
     // cuts it, and only an enemy who fires without hiding the shot gives a read worth `memory` seconds.
     resolver: { on: aggressive, mode: "animation", strength: 0.6, memory: 0.55 },
-    antiaim: { on: aggressive, yaw: "jitter", jitter: 55, pitch: "down", desync: true, desyncAngle: 58, mode: "freestanding", fakeduck: false },
+    // fake duck is a BIND, not a state: enabling it here only arms it, and it engages while the key is
+    // held (or between presses in toggle mode). It forces a real crouch, so leaving it permanently on
+    // would leave you walking at a third speed with no way to stand up.
+    antiaim: { on: aggressive, yaw: "jitter", jitter: 55, pitch: "down", desync: true, desyncAngle: 58, mode: "freestanding",
+      fakeduck: false, fakeduckKey: "KeyX", fakeduckMode: "hold" },
     // backtrack is in TICKS (12 tk @64 = 187ms). doubleTap and hideShots shift the tickbase in opposite
     // directions, so only one can apply to a given shot — double tap wins when both are on.
     tickbase: { backtrack: aggressive ? 12 : 0, hideShots: aggressive, doubleTap: false },
