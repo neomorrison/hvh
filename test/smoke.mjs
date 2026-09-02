@@ -362,7 +362,23 @@ try {
     // an agent spawned on the platform should sit at its height, not y=0
     const onPlat = HVH.agents.find(a => a.pos.x > 380 && a.pos.x < 720);
     if (onPlat) log('  platform spawn feet Y =', onPlat.pos.y.toFixed(1), '(expected ~120)');
-    for (let i = 0; i < 14; i++) HVH.fastForward(1);
+    // ...and while it runs, watch how much time the bots spend in the air. The ledge hop used to fire
+    // on EVERY frame a bot was wedged, which turned one bad angle into continuous bunny-hopping in a
+    // corner; it is one hop per cooldown now, so airborne time has to stay low.
+    const wasAir = new Map(); let jumps = 0, airFrames = 0, botFrames = 0;
+    for (let i = 0; i < 14 * 60; i++) {
+      HVH.fastForward(1 / 60);
+      for (const a of HVH.agents) {
+        if (a.isHuman || !a.alive) continue;
+        botFrames++;
+        if (!wasAir.get(a) && !a.onGround) jumps++;
+        wasAir.set(a, !a.onGround);
+        if (!a.onGround) airFrames++;
+      }
+    }
+    const pctAir = botFrames ? 100 * airFrames / botFrames : 0, jps = botFrames ? jumps / (botFrames / 60) : 0;
+    log('  bot hopping: airborne', pctAir.toFixed(1) + '% of the time ·', jps.toFixed(2), 'jumps per bot per second');
+    if (pctAir > 20 || jps > 0.6) { failures++; log('✗ bots are hopping on the spot again — the ledge hop needs its cooldown'); }
     const fell = HVH.agents.filter(a => a.alive && a.pos.y < -50).length;
     log('✓ mesh map simulated ~14s — phase:', HVH.GAME.phase, 'agents below floor:', fell);
     if (fell > 0) { failures++; log('✗ agents fell through the mesh floor'); }

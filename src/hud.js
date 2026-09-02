@@ -8,7 +8,7 @@ import { WEAPONS, NADES, TEAM, SHIFT_MAX_TICKS, HIDE_SHOT_COST, dtTicks } from '
 import { WALLS, RESCUE_ZONES, MAP_BOUNDS, losClear } from './world.js';
 import { hitboxCenter, eyePos } from './agents.js';
 import { agents, refs, GAME, vm } from './state.js';
-import { computeBloom, canShoot, visibleTo } from './combat.js';
+import { computeBloom, canShoot, visibleTo, aimCfg } from './combat.js';
 import { liveHostages } from './game.js';
 
 const $ = s => document.querySelector(s);
@@ -51,7 +51,8 @@ export function updatePlayerHUD() {
   // badges light one at a time on purpose — that IS the rule (double tap outranks hide shots, and a
   // shift still in flight suppresses backtrack), and it's easier to read than to explain.
   const tb = human.cheats.tickbase || {}, el = $("#tickStat");
-  if (!tb.hideShots && !tb.doubleTap && !(tb.backtrack > 0)) { el.style.display = "none"; return; }
+  const aa = human.cheats.antiaim || {}, fd = !!(aa.on && aa.fakeduck);
+  if (!tb.hideShots && !tb.doubleTap && !(tb.backtrack > 0) && !fd) { el.style.display = "none"; return; }
   const bank = human.shiftCharge || 0, inFlight = (human.shiftUsed || 0) > 0;
   const dtc = dtTicks(human.cur, human.fireMode);
   const dtReady = !!tb.doubleTap && dtc > 0 && bank >= dtc && !inFlight;
@@ -64,7 +65,9 @@ export function updatePlayerHUD() {
     `<span class="tk-n">${Math.floor(bank)}/${SHIFT_MAX_TICKS}</span>` +
     badge(!!tb.doubleTap, dtReady, "DT", dtc ? `double tap — ${dtc} ticks` : (human.cur === "r8" ? "the R8's hammer cock is not a next-attack check — no cheat doubles the revolver" : `${WEAPONS[human.cur] ? WEAPONS[human.cur].name : "this weapon"} can't be double tapped`)) +
     badge(!!tb.hideShots, hsReady, "HS", dtReady ? "outranked by double tap this shot" : `hide shots — ${HIDE_SHOT_COST} ticks`) +
-    badge(tb.backtrack > 0, btReady, "BT", inFlight ? "suppressed — tickbase shift in flight" : `${tb.backtrack} ticks`);
+    badge(tb.backtrack > 0, btReady, "BT", inFlight ? "suppressed — tickbase shift in flight" : `${tb.backtrack} ticks`) +
+    // in first person you cannot see your own body, so the one cue that you are really ducked is here
+    badge(fd, human.crouch && !(human.exposeT > 0), "FD", "fake duck — you are really ducked, the model is standing");
 }
 export function updateHUDWeapons() {
   const human = refs.human; if (!human || !human.cur) return;
@@ -195,13 +198,15 @@ export function updateHitChanceHUD() {
   if (!human || !human.alive || !v || !v.hitchance || anyPanelOpen()) { el.style.display = "none"; return; }
   const cs = canShoot(human);
   if (!cs.have || !cs.tgt) { el.style.display = "none"; return; }
-  const pct = Math.round(cs.hitChance * 100), need = human.cheats.aimbot.hitchance || 0;
+  const cfg = aimCfg(human);
+  const pct = Math.round(cs.hitChance * 100), need = cfg.hitchance;
   el.style.display = "block";
   el.className = pct >= need ? "ok" : "";
   el.innerHTML = `<b>${pct}%</b> ${cs.group} · ${Math.round(cs.dmg)} dmg` +
     (cs.exposure < 0.999 ? ` · ${Math.round(cs.exposure * 100)}% exposed` : "") +
     (cs.btTicks ? ` · bt ${cs.btTicks}tk` : "") +
-    (pct >= need ? "" : ` · need ${need}%`);
+    (pct >= need ? "" : ` · need ${need}%`) +
+    (cfg.overridden ? ` · ${WEAPONS[human.cur] ? WEAPONS[human.cur].name : human.cur} cfg` : "");
 }
 export function updateScopeOverlay() {
   const human = refs.human; const ov = document.getElementById('scopeOverlay');

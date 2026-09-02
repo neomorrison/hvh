@@ -136,13 +136,16 @@
   #cheatCard h2 .pulse{width:7px;height:7px;border-radius:50%;background:#8ee88f;box-shadow:0 0 7px #8ee88f;animation:pl 1s infinite;}
   @keyframes pl{0%,100%{opacity:1}50%{opacity:.3}}
   #cheatBody { flex:1; display:flex; min-height:0; }
-  .cnav { width:60px; flex:none; background:#262626; border-right:1px solid #1c1c1c; display:flex; flex-direction:column; padding:6px 0; }
+  .cnav { width:64px; flex:none; background:#262626; border-right:1px solid #1c1c1c; display:flex; flex-direction:column; padding:6px 0; }
+  /* the icons are inline SVG drawn in currentColor, so the rail sets the colour and only the opacity
+     changes between states — emoji came out as the platform's own near-black glyphs and disappeared */
   .cnavb { pointer-events:auto; background:transparent; border:0; border-left:2px solid transparent; cursor:pointer;
-           padding:13px 0; font:inherit; font-size:19px; line-height:1; }
-  .cnavb .ci { display:block; filter:grayscale(1); opacity:.45; transition:.12s; }
-  .cnavb:hover .ci { opacity:.8; }
+           color:#fff; padding:14px 0; font:inherit; line-height:0; }
+  .cnavb .ci { display:block; opacity:.5; transition:.12s; }
+  .cnavb .ci svg { height:26px; width:auto; display:block; margin:0 auto; }
+  .cnavb:hover .ci { opacity:.85; }
   .cnavb.on { background:#333; border-left-color:#8ee88f; }
-  .cnavb.on .ci { filter:none; opacity:1; }
+  .cnavb.on .ci { opacity:1; }
   .cpanes { flex:1; min-width:0; overflow-y:auto; padding:16px 16px 8px; }
   /* the open tab's name, so an icon-only rail still says where you are */
   .cpanes::before { content:attr(data-tab); display:block; font-size:11px; letter-spacing:1.4px; text-transform:uppercase; color:#7a7a7a; margin:-4px 0 12px; }
@@ -158,6 +161,9 @@
   .crow .clabel { flex:1; cursor:pointer; }
   .crow .keytag { font-size:10px; color:#767676; flex:none; }
   .crow.sub { padding-left:19px; }                              /* an option that only means something under the one above it */
+  /* a per-weapon row with its override off: it shows the master value and follows it */
+  .crow.dim { opacity:.42; }
+  .crow.dim .sl, .crow.dim select, .crow.dim input { pointer-events:none; }
   /* square check box, filled when on */
   .chk { position:relative; width:11px; height:11px; flex:none; cursor:pointer; }
   .chk input { position:absolute; opacity:0; width:0; height:0; }
@@ -175,6 +181,10 @@
   .selwrap::after { content:""; position:absolute; right:7px; top:50%; margin-top:-2px; border:4px solid transparent; border-top-color:#9a9a9a; pointer-events:none; }
   .crow select { width:100%; appearance:none; -webkit-appearance:none; background:#242424; color:#cfcfcf; border:1px solid #4c4c4c;
                  border-radius:1px; padding:3px 22px 3px 7px; font:inherit; font-size:12px; cursor:pointer; pointer-events:auto; }
+  .kbind { pointer-events:auto; background:#242424; color:#cfcfcf; border:1px solid #4c4c4c; border-radius:1px;
+           font:inherit; font-size:11px; padding:2px 9px; min-width:54px; cursor:pointer; }
+  .kbind:hover { border-color:#8ee88f; }
+  .kbind.cap { border-color:#8ee88f; color:#8ee88f; }
   .crow input[type=color] { background:#242424; border:1px solid #4c4c4c; border-radius:1px; width:38px; height:18px; padding:1px; pointer-events:auto; }
   .cnote { font-size:11px; color:#8f8f8f; line-height:1.55; background:#2a2a2a; border-left:2px solid #4fae56; border-radius:0 2px 2px 0; padding:7px 9px; }
   .cnote b { color:#9bef9c; font-weight:normal; }

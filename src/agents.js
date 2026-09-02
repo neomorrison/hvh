@@ -111,12 +111,20 @@ export function defaultCheats(aggressive) {
     // bloom cone actually makes the shot. 40% / 30 min damage are the "average values that work" —
     // strong enough that a bot trades properly, loose enough that it still shoots on a pistol round.
     aimbot: { on: aggressive, fov: 180, hitchance: aggressive ? 40 : 50, minDmg: aggressive ? 30 : 1, silent: true,
-      autoShoot: aggressive, autoScope: true, autoStop: aggressive, autoKnife: aggressive, autoRevolver: true, target: "crosshair", priority: "head", forceBody: false, baimLethal: false, safepoint: false },
+      autoShoot: aggressive, autoScope: true, autoStop: aggressive, autoKnife: aggressive, autoRevolver: true, target: "crosshair", priority: "head", forceBody: false, baimLethal: false, safepoint: false,
+      // hitchance/minDmg/priority above are the MASTER values. `weapons` holds per-weapon overrides —
+      // only the keys a weapon actually overrides are stored, so raising the master still moves every
+      // gun you have not explicitly pinned. See aimCfg().
+      weapons: {} },
     autowall: { on: aggressive, minDmg: 30 },
     // strength is the resolver's ceiling, not its answer — see resolveDesync(): a target's anti-aim
     // cuts it, and only an enemy who fires without hiding the shot gives a read worth `memory` seconds.
     resolver: { on: aggressive, mode: "animation", strength: 0.6, memory: 0.55 },
-    antiaim: { on: aggressive, yaw: "jitter", jitter: 55, pitch: "down", desync: true, desyncAngle: 58, mode: "freestanding", fakeduck: false },
+    // fake duck is a BIND, not a state: enabling it here only arms it, and it engages while the key is
+    // held (or between presses in toggle mode). It forces a real crouch, so leaving it permanently on
+    // would leave you walking at a third speed with no way to stand up.
+    antiaim: { on: aggressive, yaw: "jitter", jitter: 55, pitch: "down", desync: true, desyncAngle: 58, mode: "freestanding",
+      fakeduck: false, fakeduckKey: "KeyX", fakeduckMode: "hold" },
     // backtrack is in TICKS (12 tk @64 = 187ms). doubleTap and hideShots shift the tickbase in opposite
     // directions, so only one can apply to a given shot — double tap wins when both are on.
     tickbase: { backtrack: aggressive ? 12 : 0, hideShots: aggressive, doubleTap: false },
@@ -226,15 +234,19 @@ export function updateAgentVisual(a) {
   // While `exposeT` is running the agent has just fired WITHOUT hiding the shot: to shoot you must be
   // aiming at your target, so your real angles are pinned and the fake stops protecting you. That is the
   // window every HvH player is actually reading — and what "hide shots" (tickbase) exists to close.
-  if (aa && aa.on && aa.desync && a.alive && !(a.exposeT > 0)) {
+  // desync OR fake duck: the sideways fake and the vertical one are separate tricks, and fake duck used
+  // to do nothing at all unless desync happened to be switched on beside it
+  if (aa && aa.on && (aa.desync || aa.fakeduck) && a.alive && !(a.exposeT > 0)) {
     // The fake body's offset IS the desync angle, made geometry: the old formula started at 16 units
     // even at 0°, so a desync slider set to nothing still hid you. It now scales from nothing at 0° to
     // about a body's width at a maxed 58°, which is what the slider claims to do.
-    const ang = (aa.desyncAngle || 0) * Math.PI / 180, side = a.desyncSide || 1, mag = 30 * Math.sin(ang) * side;
+    const ang = (aa.desyncAngle || 0) * Math.PI / 180, side = a.desyncSide || 1;
+    const mag = aa.desync ? 30 * Math.sin(ang) * side : 0;
     const off = a._desyncOff || (a._desyncOff = new THREE.Vector3());
     off.set(Math.cos(a.yaw) * mag, 0, -Math.sin(a.yaw) * mag);
     // FAKE DUCK: the stance the server has is not the one on screen, so the fake is at the wrong HEIGHT
     // as well as the wrong side — an un-resolved shot sails over a crouch or under a stand.
+    // the real stance is forced DOWN by applyFakeDuck, so the fake sits a stance-height above it
     if (aa.fakeduck) off.y = (a.crouch ? 1 : -1) * (EYE_STAND - EYE_CROUCH);
     if (mag === 0 && !aa.fakeduck) a._desyncOff = null;         // no angle and no fake duck is no fake at all
   } else a._desyncOff = null;

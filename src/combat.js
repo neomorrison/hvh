@@ -57,17 +57,34 @@ function depenetrateAgents(a) {
   if (px === 0 && pz === 0) return false;
   a.pos.x += px; a.pos.z += pz; return true;
 }
-/* Fake duck is not free: holding the fake stance means spamming the duck key, and in CS that leaves you
-   crawling.  It is the trade the setting is FOR — a very hard read, bought with your mobility. */
-export const FAKEDUCK_SPEED = 0.34;
-export function fakeDuckScale(a) {
+/* ---- FAKE DUCK ----
+   The stance half of anti-aim, and the half that actually does the work.  Spamming duck leaves the
+   SERVER holding you ducked while the client still draws you standing, so your hitboxes sit ~18 units
+   under the model everyone is aiming at.
+   That means the real crouch has to go ON — hitboxes, eye height, bloom and speed all follow the truth
+   — while updateAgentVisual() renders the opposite stance and the fake carries a vertical offset to
+   match.  Forcing the stance is the whole mechanic: without it, fake duck was a rendering trick that
+   moved no hitbox and only mattered if desync happened to be on as well.
+   It is not free — while it is held you are ducked, and a little slower still than a normal duck
+   because you are spamming the key rather than holding it. Which is exactly why it is a BIND: the
+   menu switch only arms it, `_fdActive` (the key, in main.js) decides when it is actually on. Leaving
+   it permanently engaged would pin you at a third of your speed with no way to stand up. */
+export const FAKEDUCK_SPEED = 0.8;
+export function fakeDucking(a) {
   const aa = a.cheats && a.cheats.antiaim;
-  return (aa && aa.on && aa.fakeduck) ? FAKEDUCK_SPEED : 1;
+  return !!(aa && aa.on && aa.fakeduck && a.alive && a._fdActive);
 }
+export function fakeDuckScale(a) { return fakeDucking(a) ? FAKEDUCK_SPEED : 1; }
+/* Called right after an agent's stance input is decided (the player's crouch key, a bot's AI) and
+   before anything reads it, so the forced duck holds for the rest of the frame — including the shot. */
+export function applyFakeDuck(a) { if (fakeDucking(a)) a.crouch = true; }
 export function moveAgent(a, dirXZ, dt, combat) {
   const w = WEAPONS[a.cur] || { run: 240 };
   let speed = (a.scoped && w.scopedRun) ? w.scopedRun : (w.run || 240);
-  if (a.crouch) speed *= 0.52;
+  // CS movement: ducking only slows you while your feet are on the ground. In the air the duck is
+  // just the legs tucking up — a crouch-jump keeps every unit of the speed you left the ground with,
+  // which is what makes crouch-jumping a peek technique rather than a way to stall yourself mid-air.
+  if (a.crouch && a.onGround) speed *= 0.52;
   if (a.walk) speed *= 0.52;
   speed *= fakeDuckScale(a);
   if (combat) speed *= 0.9;
@@ -329,6 +346,17 @@ function bruteRead(shooter, target) {
   b.t = clock.t;
   return b;
 }
+/* WHAT A WRONG READ ACTUALLY COSTS YOU.
+   A desync is the lower body rotating about the spine — it is not the whole player teleporting
+   sideways. So the displacement between the real hitbox and the fake one depends on how far that box
+   sits from the axis it turns about: the head is out at the end of the lever and swings the full
+   width, the chest sits close to the spine, and the pelvis and legs barely move at all.
+   That is why HvH players body-aim a desyncer. The body groups' real and fake boxes still overlap,
+   and that overlap IS the safe point — a bad read on the stomach usually lands anyway, while the same
+   bad read on the head is a clean whiff. Treating every hitbox as if it moved the full desync width
+   (which is what the first cut of this did) made desync miss bodies constantly, which is not HvH. */
+export const DESYNC_SWING = { head: 1, chest: 0.35, stomach: 0.22, legs: 0.1 };
+
 export function resolveDesync(shooter, target) {
   if (!target._desyncOff) return true;                         // no fake up — nothing to resolve
   const R = shooter.cheats.resolver || {};
@@ -433,7 +461,7 @@ export function traceHitbox(from, dir, body) {
 
 /* Evaluate ONE candidate position of a target — either the live body or one of its recorded ticks.
    `ghost` only needs { pos, crouch }, which is all hitboxes()/hitboxCenter() read. */
-function evalShot(a, tgt, ghost, order, cb) {
+function evalShot(a, tgt, ghost, order, cb, cfg) {
   const me = eyePos(a);
   const directVis = visibleTo(a, ghost);
   const none = { group: null, aimPoint: null, through: null, dmg: 0, exposure: 0 };
@@ -450,11 +478,25 @@ function evalShot(a, tgt, ghost, order, cb) {
   // demands more damage than the gun can physically deliver here: a pistol round against armour would
   // otherwise leave a 30-min-damage bot standing there refusing to shoot at all.
   const want = directVis
-    ? Math.min(cb.aimbot.minDmg || 1, Math.max(...shots.map(x => x.dmg)))
-    : Math.max(cb.aimbot.minDmg || 1, cb.autowall.minDmg || 1);
+    ? Math.min(cfg.minDmg, Math.max(...shots.map(x => x.dmg)))
+    : Math.max(cfg.minDmg, cb.autowall.minDmg || 1);
   // the exposure probe costs four line-of-sight traces, so it is paid once, for the hitbox we settled on
   for (const x of shots) if (x.dmg >= want) { x.exposure = x.vis ? hitboxExposure(a, ghost, x.group) : 1; return x; }
   return none;
+}
+
+/* The aimbot settings in force for what this agent is holding.  A Deagle wants a different min hit
+   chance and a different hitbox than a SCAR does, so hit chance, min damage and hitbox priority each
+   read from the weapon's own override when it has one and fall through to the master otherwise —
+   which means moving the master still moves every gun you have not pinned. */
+export function aimCfg(a) {
+  const ab = a.cheats.aimbot, w = ab.weapons && ab.weapons[a.cur];
+  return {
+    hitchance: (w && w.hitchance != null) ? w.hitchance : (ab.hitchance || 0),
+    minDmg: (w && w.minDmg != null) ? w.minDmg : (ab.minDmg || 1),
+    priority: (w && w.priority != null) ? w.priority : ab.priority,
+    overridden: !!(w && (w.hitchance != null || w.minDmg != null || w.priority != null)),
+  };
 }
 
 /* Shared "can I take this shot right now?" predicate used by BOTH auto-shoot and
@@ -489,18 +531,19 @@ function selectShot(a) {
   }
   cands.sort((x, y) => (y.vis ? 1 : 0) - (x.vis ? 1 : 0));   // stable: a target we can actually see outranks one we can only rewind/wallbang
   const tgt = cands[0].t; res.tgt = tgt;
+  const cfg = aimCfg(a);
   let order = cb.aimbot.forceBody ? ["stomach", "chest", "legs"]
-    : (cb.aimbot.priority === "head" ? ["head", "chest", "stomach"] : ["chest", "stomach", "head"]);
+    : (cfg.priority === "head" ? ["head", "chest", "stomach"] : ["chest", "stomach", "head"]);
   // baim-if-lethal: if a body shot already KILLS, take the bigger/safer body hitbox instead of the head
   if (cb.aimbot.baimLethal && !cb.aimbot.forceBody && order[0] === "head") {
     const cd = me.distanceTo(hitboxCenter(tgt, "chest")), bodyDmg = computeDamage(a.cur, "chest", cd, tgt.armor > 0, tgt.helmet, tgt.armor).damage;
     if (bodyDmg >= tgt.hp) order = ["chest", "stomach", "head"];
   }
-  const minHc = cb.aimbot.hitchance || 0;
+  const minHc = cfg.hitchance;
   // hit chance is measured against the BODY the solution belongs to — a rewound aim point on the live
   // hitboxes is a shot at where nobody is, which is what the old signature quietly asked for.
   const accOf = (x, body) => (x.group ? computeAccuracy(a, x.aimPoint, body, x.group, x.exposure) : 0);
-  let best = evalShot(a, tgt, tgt, order, cb), bestBody = tgt, bestAcc = accOf(best, tgt), bestAge = 0, bestRec = null;
+  let best = evalShot(a, tgt, tgt, order, cb, cfg), bestBody = tgt, bestAcc = accOf(best, tgt), bestAge = 0, bestRec = null;
   // BACKTRACK — only when the live shot isn't already good enough. A peeker who is behind cover NOW
   // was standing in the open a few ticks ago; the server still accepts a hit on that tick.
   // ...but only when rewinding can actually change the answer: the live shot has to be failing AND the
@@ -509,7 +552,7 @@ function selectShot(a) {
   const bt = backtrackTicks(a);
   if (bt > 0 && bestAcc * 100 < minHc && (!best.group || trailMoved(tgt, bt))) {
     for (const rec of sampleTrail(tgt, bt)) {
-      const alt = evalShot(a, tgt, rec, order, cb);
+      const alt = evalShot(a, tgt, rec, order, cb, cfg);
       if (!alt.group) continue;
       const acc = accOf(alt, rec);
       if (acc > bestAcc) { best = alt; bestBody = rec; bestAcc = acc; bestAge = (tgt._tick | 0) - rec.tick; bestRec = rec; }
@@ -550,7 +593,7 @@ export function canShoot(a) {
   // EVERYONE respects min hit chance now, bots included. Bots used to ignore it and spray at whatever
   // accuracy they happened to have, then had their hit roll CAPPED by their persona on top — which is
   // why one player's aimbot could hold off ten of them. Same gate, same rules, both sides.
-  res.ok = firable && res.hitChance * 100 >= (a.cheats.aimbot.hitchance || 0);
+  res.ok = firable && res.hitChance * 100 >= aimCfg(a).hitchance;
   return res;
 }
 
@@ -561,7 +604,7 @@ export function canShoot(a) {
 export function baseMoveSpeed(a, combat) {
   const w = WEAPONS[a.cur] || { run: 240 };
   let speed = (a.scoped && w.scopedRun) ? w.scopedRun : (w.run || 240);
-  if (a.crouch) speed *= 0.52;
+  if (a.crouch && a.onGround) speed *= 0.52;      // airborne duck costs nothing — see moveAgent
   if (a.walk) speed *= 0.52;
   speed *= fakeDuckScale(a);
   if (combat) speed *= 0.9;
@@ -575,7 +618,7 @@ export function autoStopScale(a, combat) {
   if (a.reloadT > 0 || !wp || (wp.ammo || 0) <= 0) return 1;
   const cs = canShoot(a);
   if (!cs.have || !cs.tgt) return 1;                               // nothing worth slowing down for
-  const need = THREE.MathUtils.clamp((a.cheats.aimbot.hitchance || 0) / 100, 0, 1);
+  const need = THREE.MathUtils.clamp(aimCfg(a).hitchance / 100, 0, 1);
   if (need <= 0) return 1;
   const vx = a.vel.x, vz = a.vel.z, full = baseMoveSpeed(a, combat);
   const accAt = sc => { a.vel.x = full * sc; a.vel.z = 0; const acc = computeAccuracy(a, cs.aimPoint, cs.body, cs.group, cs.exposure); a.vel.x = vx; a.vel.z = vz; return acc; };
@@ -721,16 +764,21 @@ export function aimbotFire(a) {
   // first one just widened.
   const resolve = (cone) => {
     if (!cs.tgt.alive) { addTracer(me.clone().add(dirTo.clone().multiplyScalar(40)), cs.aimPoint); addImpact(cs.aimPoint); return; }
-    // RESOLVER vs a desyncing enemy: an un-resolved shot whiffs to the FAKE (rendered) side —
-    // unless we took a safepoint, which is aimed between the two answers precisely so it doesn't.
+    // RESOLVER vs a desyncing enemy: a lost read means aiming at the FAKE — but only as far as this
+    // particular hitbox actually swings (see DESYNC_SWING). Nothing is decided here: the round is
+    // still traced against the real body, so whether it lands falls out of whether the two boxes
+    // overlap. Head: they don't. Stomach: they do, and that overlap is the safe point.
+    // A deliberate safepoint is aimed between both answers already, so it skips the resolver entirely.
+    let aimAt = cs.aimPoint, lostRead = false;
     if (cs.tgt._desyncOff && !cs.safepoint && !resolveDesync(a, cs.tgt)) {
-      const fake = cs.aimPoint.clone().add(cs.tgt._desyncOff);
-      addTracer(me.clone().add(fake.clone().sub(me).normalize().multiplyScalar(40)), fake); addImpact(fake);
-      shotLine(a, me, fake, false);
-      if (a.isHuman) addHitLog("desync beat the resolver", "inacc");
-      return;
+      const off = cs.tgt._desyncOff, swing = DESYNC_SWING[cs.group] != null ? DESYNC_SWING[cs.group] : 1;
+      // the sideways fake is a rotation, so it scales with the lever; a fake DUCK is a real vertical
+      // shift of the whole body, so that part is off by its full amount whichever box you picked
+      aimAt = cs.aimPoint.clone(); aimAt.x += off.x * swing; aimAt.z += off.z * swing; aimAt.y += off.y;
+      lostRead = true;
     }
-    const dir = coneRay(dirTo, cone, Math.random(), Math.random() * TAU, new THREE.Vector3());
+    const dirAim = aimAt === cs.aimPoint ? dirTo : aimAt.clone().sub(me).normalize();
+    const dir = coneRay(dirAim, cone, Math.random(), Math.random() * TAU, new THREE.Vector3());
     const hit = traceHitbox(me, dir, body);
     // a bullet that strays into the cover we were peeking past is stopped by it, exactly as the
     // exposure term in the hit chance said it might be
@@ -749,7 +797,7 @@ export function aimbotFire(a) {
       applyHit(a, cs.tgt, hit.group, hit.dist, cs.through);
       if (a.isHuman && cs.btTicks > 0) addHitLog(`backtracked ${cs.btTicks} tick${cs.btTicks > 1 ? 's' : ''}`, "hs");
     } else {
-      if (a.isHuman) addHitLog(blocked ? "clipped cover" : "missed — inaccuracy", "inacc");
+      if (a.isHuman) addHitLog(blocked ? "clipped cover" : lostRead ? "desync beat the resolver" : "missed — inaccuracy", "inacc");
       addImpact(end);
     }
     shotLine(a, me, end, !!(hit && !blocked));

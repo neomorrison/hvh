@@ -6,7 +6,7 @@ import { WEAPONS, TEAM, JUMP_VEL } from './data.js';
 import { NODES, EDGES, RESCUE_ZONES, MAP_BOUNDS, astar, nearestNode, losClear } from './world.js';
 import { hitboxCenter, eyePos } from './agents.js';
 import { agents, GAME, clock } from './state.js';
-import { aimbotFire, moveAgent, meleeAttack, visibleTo, startReload, giveWeapon, hasAnyAmmo, autoStopScale } from './combat.js';
+import { aimbotFire, moveAgent, meleeAttack, visibleTo, startReload, giveWeapon, hasAnyAmmo, autoStopScale, applyFakeDuck, baseMoveSpeed } from './combat.js';
 import { liveHostages, armorBuy } from './game.js';
 
 export function botBuy(a) {
@@ -82,18 +82,29 @@ function botMove(a, dir, dt, combat) {
   if (d.lengthSq() > 1e-4) d.normalize();
   const before = a.pos.clone();
   moveAgent(a, d, dt, combat);
-  // "stuck" = not advancing toward the goal direction — catches a bot sliding sideways along a wall
+  a._hopCd = Math.max(0, (a._hopCd || 0) - dt);
+  // "stuck" = not advancing toward the goal direction — catches a bot sliding sideways along a wall.
+  // Measured against what the bot is TRYING to do, not a fixed 18u/s: auto-stop deliberately holds it
+  // still to take a shot, and a fixed threshold reads that as wedged. A bot barely trying to move at
+  // all (heavily auto-stopped, or planted for a wallbang) is not stuck, it is aiming.
   const dl = Math.hypot(dir.x, dir.z) || 1;
   const progress = ((a.pos.x - before.x) * dir.x + (a.pos.z - before.z) * dir.z) / dl;
-  if (dir.lengthSq() > 1e-4 && progress < dt * 18) {
+  const intent = baseMoveSpeed(a, combat) * (a.speedScale != null ? a.speedScale : 1);
+  if (dir.lengthSq() > 1e-4 && intent > 60 && progress < intent * dt * 0.25) {
     a.aiStuck = (a.aiStuck || 0) + dt;
-    if (a.aiStuck > 0.3 && a.onGround && a.aiState !== "fight") a.vel.y = JUMP_VEL;   // hop a ledge while roaming (not mid-fight — jumping ruins aim)
+    // ONE hop per cooldown, and only with both feet down. This used to fire every frame for as long as
+    // the bot was stuck, so a single wedge on a door frame turned into continuous bunny-hopping in the
+    // corner — which is what it looked like from the outside. A hop is an attempt to clear a ledge; if
+    // it didn't work, the repath below is the answer, not hopping harder.
+    if (a.aiStuck > 0.35 && a.onGround && a._hopCd <= 0 && a.aiState !== "fight" && (a.speedScale == null || a.speedScale > 0.8)) {
+      a.vel.y = JUMP_VEL; a._hopCd = 0.9;
+    }
     if (a.aiStuck > 0.7) {                                                            // genuinely wedged → unstick, even mid-fight
       // can't traverse this edge — TEMPORARILY cut it so A* routes around (e.g. the real doorway).
       // Skip the cut when a teammate is shoving us (separation false-positive); pruneEdge auto-heals
       // it and refuses to sever chain edges, so the graph can never fragment into a stalemate.
       if (a.aiPath && a.aiPath.length && !sep) pruneEdge(nearestNode(a.pos), a.aiPath[0]);
-      a.aiPath = []; a.aiTimer = 0; a.aiStuck = 0;
+      a.aiPath = []; a.aiTimer = 0; a.aiStuck = 0; a._hopCd = 0.9;   // repathing is the fix — don't also hop at it
       if (a.aiState !== "fight") a.yaw += (Math.random() - 0.5) * 1.5;                // roaming: spin to a new heading
       else { const pl = Math.hypot(dir.z, dir.x) || 1, s = (Math.random() < 0.5 ? 1 : -1) * 2; a.pos.x += -dir.z / pl * s; a.pos.z += dir.x / pl * s; }   // mid-fight: tiny perpendicular sidestep off the corner (don't spin aim)
     }
@@ -122,6 +133,10 @@ const needRepath = a => a.aiTimer <= 0 || (!a.aiPath.length && !a.aiPathFail);  
 
 export function botThink(a, dt) {
   if (!a.alive) return;
+  // a bot's "bind": it fake ducks while holding an angle on someone, never while repositioning —
+  // the same judgement a player makes with the key
+  a._fdActive = !!a.aiTarget && Math.hypot(a.vel.x, a.vel.z) < 40;
+  applyFakeDuck(a);              // a bot running fake duck is really ducked too — same stance, same cost
   healEdges();   // restore any temporary nav cuts whose cooldown elapsed (keeps CT<->T connected)
   a.aiTimer -= dt;
   a.speedScale = 1;
@@ -167,12 +182,16 @@ export function botThink(a, dt) {
       a.aiState = "roam";
       if (needRepath(a)) { navTo(a, nearestNode(target.pos)); if (a.aiPathFail) navTo(a, roamNode(a)); a.aiTimer = 0.7 + Math.random() * 0.5; }   // target unreachable → relocate to a fresh angle, not the wall
       // steady up for a wallbang, but never fully root: floored at 0.3 so a bot lining up a penetration
-      // still walks toward a real angle instead of camping the wall (the stalemate this branch exists to break)
-      if (a.cheats.aimbot.on && a.cheats.aimbot.autoStop) a.speedScale = Math.max(0.3, autoStopScale(a, true));
+      // still walks toward a real angle instead of camping the wall (the stalemate this branch exists to break).
+      // And it is on a CLOCK: after a second and a half of shooting at a wall without solving it, the
+      // slow-down is abandoned entirely and the bot just goes and finds a real angle. Otherwise a bot
+      // that can "see" someone through cover crawls in a corner indefinitely.
+      a._wallHold = (a._wallHold || 0) + dt;
+      if (a.cheats.aimbot.on && a.cheats.aimbot.autoStop && a._wallHold < 1.5) a.speedScale = Math.max(0.3, autoStopScale(a, true));
       followPath(a, dt, true);
       aimbotFire(a);                                  // still try — autowall punches thin walls; thick ones just won't fire
     } else {
-      a.aiState = "fight"; a.aiNoContact = 0; a.aiLastSeen = target.pos.clone(); a.aiLastSeenT = 3;
+      a.aiState = "fight"; a.aiNoContact = 0; a._wallHold = 0; a.aiLastSeen = target.pos.clone(); a.aiLastSeenT = 3;
       const style = a.persona ? a.persona.style : "peek";
       if (a.aiTimer <= 0) { a.aiStrafe *= -1; a.aiTimer = (style === "rush" ? 0.25 : 0.45) + Math.random() * 0.6; }
       const right = new THREE.Vector3(Math.cos(a.yaw), 0, -Math.sin(a.yaw));
@@ -187,7 +206,7 @@ export function botThink(a, dt) {
       aimbotFire(a);
     }
   } else {
-    a.aiState = "roam"; a.aiTarget = null; a.scoped = false;
+    a.aiState = "roam"; a.aiTarget = null; a.scoped = false; a._wallHold = 0;
     a.aiNoContact = (a.aiNoContact || 0) + dt;                       // anti-camp clock: rises while we see no one
     if (a.aiLastSeenT > 0) a.aiLastSeenT -= dt;
     if (a.aiLastSeenT > 0 && a.aiLastSeen && a.pos.distanceTo(a.aiLastSeen) > 80) {
