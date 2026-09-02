@@ -8,7 +8,7 @@ import { WEAPONS, NADES, TEAM, SHIFT_MAX_TICKS, HIDE_SHOT_COST, dtTicks } from '
 import { WALLS, RESCUE_ZONES, MAP_BOUNDS, losClear } from './world.js';
 import { hitboxCenter, eyePos } from './agents.js';
 import { agents, refs, GAME, vm } from './state.js';
-import { computeBloom, visibleTo } from './combat.js';
+import { computeBloom, canShoot, visibleTo } from './combat.js';
 import { liveHostages } from './game.js';
 
 const $ = s => document.querySelector(s);
@@ -62,7 +62,7 @@ export function updatePlayerHUD() {
   el.innerHTML = `<span class="tk-l">TICKBASE</span>` +
     `<span class="tk-bar"><span style="width:${Math.round(100 * Math.min(1, bank / SHIFT_MAX_TICKS))}%"></span></span>` +
     `<span class="tk-n">${Math.floor(bank)}/${SHIFT_MAX_TICKS}</span>` +
-    badge(!!tb.doubleTap, dtReady, "DT", dtc ? `double tap — ${dtc} ticks` : `${WEAPONS[human.cur] ? WEAPONS[human.cur].name : "this weapon"} can't be double tapped`) +
+    badge(!!tb.doubleTap, dtReady, "DT", dtc ? `double tap — ${dtc} ticks` : (human.cur === "r8" ? "the R8's hammer cock is not a next-attack check — no cheat doubles the revolver" : `${WEAPONS[human.cur] ? WEAPONS[human.cur].name : "this weapon"} can't be double tapped`)) +
     badge(!!tb.hideShots, hsReady, "HS", dtReady ? "outranked by double tap this shot" : `hide shots — ${HIDE_SHOT_COST} ticks`) +
     badge(tb.backtrack > 0, btReady, "BT", inFlight ? "suppressed — tickbase shift in flight" : `${tb.backtrack} ticks`);
 }
@@ -185,6 +185,23 @@ export function updateBloomRing() {
   let dia = THREE.MathUtils.clamp(bloom * focal * 1.3, 6, 340);
   ring.style.width = dia + "px"; ring.style.height = dia + "px";
   setCrosshairGap(THREE.MathUtils.clamp(dia * 0.22, 2, 80));
+}
+/* Live hit-chance readout under the crosshair (Visuals → Debug).  The same number the aimbot's gate
+   uses, on the same solution it picked — so "why did it not shoot" and "why did that miss" are things
+   you can watch happen rather than infer. */
+export function updateHitChanceHUD() {
+  const human = refs.human, el = $("#hcInd");
+  const v = human && human.cheats.visuals;
+  if (!human || !human.alive || !v || !v.hitchance || anyPanelOpen()) { el.style.display = "none"; return; }
+  const cs = canShoot(human);
+  if (!cs.have || !cs.tgt) { el.style.display = "none"; return; }
+  const pct = Math.round(cs.hitChance * 100), need = human.cheats.aimbot.hitchance || 0;
+  el.style.display = "block";
+  el.className = pct >= need ? "ok" : "";
+  el.innerHTML = `<b>${pct}%</b> ${cs.group} · ${Math.round(cs.dmg)} dmg` +
+    (cs.exposure < 0.999 ? ` · ${Math.round(cs.exposure * 100)}% exposed` : "") +
+    (cs.btTicks ? ` · bt ${cs.btTicks}tk` : "") +
+    (pct >= need ? "" : ` · need ${need}%`);
 }
 export function updateScopeOverlay() {
   const human = refs.human; const ov = document.getElementById('scopeOverlay');
