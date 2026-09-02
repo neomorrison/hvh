@@ -101,13 +101,14 @@ try {
       if (!(combat.backtrackTicks(bot) > 0)) { failures++; log('✗ bots should carry a backtrack config of their own'); }
       log('  backtrack: window', data.MAX_BACKTRACK_TICKS, 'ticks @', data.TICK_RATE, '=', Math.round(1000 / data.TICK_RATE * data.MAX_BACKTRACK_TICKS) + 'ms · sample bot holds', bot.trail.length, 'records');
       // --- which weapons can be double tapped falls out of cycle-vs-command-budget, not a hand-list ---
-      const dtWant = { duals: 10, usp: 13, glock: 13, deagle: 15, scar: 16, g3: 16, r8: 16, ssg: 0, knife: 0 };
+      const dtWant = { duals: 10, usp: 13, glock: 13, deagle: 15, scar: 16, g3: 16, r8: 0, ssg: 0, knife: 0 };
       for (const k in dtWant) {
         const got = data.dtTicks(k);
         if (got !== dtWant[k]) { failures++; log(`✗ dtTicks(${k}) = ${got}, expected ${dtWant[k]}`); }
       }
-      if (data.dtTicks('r8', 'fan') !== 0) { failures++; log("✗ the R8 fan cycle is over budget — it must not be double tappable"); }
-      log('  double tap cost: duals 10 · usp/glock 13 · deagle 15 · scar/g3/r8 16 ticks · ssg over budget (bolt)');
+      if (data.dtTicks('r8', 'fan') !== 0) { failures++; log("✗ the R8 fan must not be double tappable either"); }
+      if (!data.NO_DOUBLE_TAP.has('r8')) { failures++; log("✗ the revolver has to be on the double-tap exclusion list, not merely over budget"); }
+      log('  double tap cost: duals 10 · usp/glock 13 · deagle 15 · scar/g3 16 ticks · r8 excluded · ssg over budget (bolt)');
 
       const reset = (hide, dt, wep) => { bot.cur = wep || 'deagle'; bot.fireMode = 'primary'; bot.weapons[bot.cur] = { ammo: 8, reserve: 8 };
         bot.cheats.antiaim.on = true; bot.cheats.antiaim.desync = true; bot.cheats.tickbase.hideShots = hide; bot.cheats.tickbase.doubleTap = dt;
@@ -144,6 +145,15 @@ try {
       // a bolt-action can never double tap however full the bank is
       reset(false, true, 'ssg');
       if (combat.onShotFired(bot) !== 'exposed' || bot._dtPending) { failures++; log('✗ the SSG bolt cycle is over budget — it must not double tap'); }
+      // ...and neither can the revolver, whatever the bank holds: its hammer cock is not a next-attack check
+      for (const mode of ['primary', 'fan']) {
+        reset(false, true, 'r8'); bot.fireMode = mode;
+        if (combat.onShotFired(bot) !== 'exposed' || bot._dtPending) { failures++; log(`✗ the R8 (${mode}) must not double tap`); }
+        if (bot.shiftCharge !== data.SHIFT_MAX_TICKS) { failures++; log('✗ a weapon that cannot double tap must not spend shift ticks trying'); }
+        let fired = 0; combat.fireDoubleTap(bot, () => fired++);
+        if (fired !== 0) { failures++; log('✗ the R8 fired a second round'); }
+      }
+      bot.fireMode = 'primary';
       bot.cheats.tickbase.doubleTap = false; bot.cheats.tickbase.hideShots = false; bot.shiftUsed = 0;
     }
   }
@@ -192,6 +202,125 @@ try {
     while (world.WALLS.length) world.WALLS.pop();
     for (const w of saved) world.WALLS.push(w);
     HVH.agents.forEach((a, i) => a.alive = aliveSaved[i]);
+  }
+
+  // --- hit chance IS the shot: the estimate and the bullet sample the same cone ---
+  {
+    const combat = await import('../src/combat.js');
+    const agentsMod = await import('../src/agents.js');
+    const human = HVH.human, world = await import('../src/world.js');
+    const saved = world.WALLS.splice(0, world.WALLS.length);          // open ground: exposure is 1, only spread is in play
+    const foe = HVH.agents.find(a => !a.isHuman && a.team !== human.team);
+    const aliveSaved = HVH.agents.map(a => a.alive);
+    for (const a of HVH.agents) if (a !== human && a !== foe) a.alive = false;
+    foe.alive = true; foe.crouch = false; foe.armor = 0; foe.helmet = false; foe.hp = 100;
+    foe.cheats.antiaim.on = false; foe._desyncOff = null;             // no desync — inaccuracy is the only thing that can miss
+    human.cheats.aimbot.on = true; human.cheats.aimbot.autoStop = false; human.cheats.aimbot.silent = true;
+    human.cheats.aimbot.priority = 'head'; human.cheats.aimbot.forceBody = false; human.cheats.aimbot.baimLethal = false;
+    human.cheats.aimbot.minDmg = 1; human.cheats.autowall.on = false; human.cheats.tickbase.backtrack = 0;
+    human.cheats.tickbase.doubleTap = false; human.cheats.tickbase.hideShots = false;
+    human.cur = 'usp'; human.weapons.usp = { ammo: 12, reserve: 24 };
+    human.reloadT = 0; human.firePenalty = 0; human.hurtBloom = 0; human.landBloom = 0;
+    human.crouch = false; human.scoped = false; human.onGround = true; human.walk = false; human.bhopBoost = 1;
+    human.pos.set(0, 0, 0); human.eye = 64; human.yaw = 0; human.pitch = 0; human.vel.set(0, 0, 0);
+
+    // 1. the estimator predicts the sampler. Both walk the same CS spread distribution, so a big
+    //    Monte-Carlo run of real bullets has to land on the number the menu gates on.
+    foe.pos.set(0, 0, -420); combat.beginSimFrame();
+    const from = agentsMod.eyePos(human), aim = agentsMod.hitboxCenter(foe, 'head');
+    const dir = aim.clone().sub(from).normalize(), cone = combat.computeBloom(human);
+    const predicted = combat.computeAccuracy(human, aim, foe, 'head', 1);
+    let land = 0; const N = 20000;
+    for (let i = 0; i < N; i++) {
+      const d = combat.coneRay(dir, cone, Math.random(), Math.random() * Math.PI * 2);
+      const h = combat.traceHitbox(from, d, foe);
+      if (h && h.group === 'head') land++;
+    }
+    const measured = land / N;
+    log('  hit chance at 420u on the head: predicted', (predicted * 100).toFixed(1) + '%', '· measured over', N, 'bullets', (measured * 100).toFixed(1) + '%');
+    if (Math.abs(predicted - measured) > 0.05) { failures++; log('✗ the hit chance the aimbot gates on is not the hit chance the bullet has'); }
+    if (!(predicted > 0.02 && predicted < 0.98)) { failures++; log('✗ this range was meant to be a genuinely uncertain shot — the test proves nothing'); }
+
+    // 2. 100% has to MEAN 100%: it only fires when the whole cone is inside the hitbox, and then it hits.
+    human.cheats.aimbot.hitchance = 100;
+    foe.pos.set(0, 0, -900); combat.beginSimFrame();
+    if (combat.canShoot(human).ok) { failures++; log('✗ a 900u pistol headshot is not a certainty — 100% hit chance must hold fire'); }
+    foe.pos.set(0, 0, -120); combat.beginSimFrame();
+    if (!combat.canShoot(human).ok) { failures++; log('✗ a point-blank standing headshot IS a certainty — 100% hit chance should take it'); }
+    let fired = 0, missed = 0;
+    for (let i = 0; i < 250; i++) {
+      human.fireCd = 0; human.firePenalty = 0; human.hurtBloom = 0; human.weapons.usp.ammo = 12; foe.hp = 100; foe.alive = true;
+      combat.beginSimFrame();
+      const before = foe.hp;
+      if (combat.aimbotFire(human)) { fired++; if (foe.hp >= before) missed++; }
+    }
+    log('  100% hit chance:', fired, 'shots fired,', missed, 'missed');
+    if (fired !== 250) { failures++; log('✗ every one of those shots qualified — the gate should have fired all of them'); }
+    if (missed !== 0) { failures++; log('✗ a 100% hit chance shot missed: the bullet is being rolled against a cone the gate never approved'); }
+
+    // 3. ...and the fire penalty still lands on the NEXT shot, not this one (that is what used to break it)
+    human.fireCd = 0; human.firePenalty = 0; human.weapons.usp.ammo = 12; foe.hp = 100; foe.alive = true; combat.beginSimFrame();
+    combat.aimbotFire(human);
+    if (!(human.firePenalty > 0)) { failures++; log('✗ firing should still cost bloom — for the shot after it'); }
+
+    human.cheats.aimbot.hitchance = 50;
+    while (world.WALLS.length) world.WALLS.pop();
+    for (const w of saved) world.WALLS.push(w);
+    HVH.agents.forEach((a, i) => a.alive = aliveSaved[i]);
+  }
+
+  // --- the resolver has to earn its read; anti-aim is what takes it away ---
+  {
+    const combat = await import('../src/combat.js');
+    const { clock } = await import('../src/state.js');
+    const human = HVH.human;
+    const foe = HVH.agents.find(a => !a.isHuman && a.team !== human.team);
+    const savedRes = JSON.parse(JSON.stringify(human.cheats.resolver)), savedAA = JSON.parse(JSON.stringify(foe.cheats.antiaim));
+    human.cheats.resolver = { on: true, mode: 'animation', strength: 0.6, memory: 0.55 };
+    foe.cheats.antiaim = { on: true, yaw: 'back', jitter: 55, pitch: 'down', desync: true, desyncAngle: 8, mode: 'at_target', fakeduck: false };
+    foe._desyncOff = { x: 12, y: 0, z: 0 };                     // a fake is up; only the resolver decides now
+    foe._lastExpose = null; foe._sideStamp = 0;
+    const rate = () => { let n = 0; for (let i = 0; i < 6000; i++) if (combat.resolveDesync(human, foe)) n++; return n / 6000; };
+    const naked = rate();
+    foe.cheats.antiaim.yaw = 'jitter'; foe.cheats.antiaim.desyncAngle = 58; foe.cheats.antiaim.fakeduck = true;
+    const dressed = rate();
+    foe._lastExpose = clock.t;                                   // ...but a shot fired without hiding it gives the read back
+    const afterShot = rate();
+    foe._lastExpose = null;
+    human.cheats.resolver.on = false;
+    const off = rate();
+    log('  resolver vs desync — naked', (naked * 100) | 0, '%· full anti-aim', (dressed * 100) | 0, '%· right after their shot', (afterShot * 100) | 0, '%· resolver off', (off * 100) | 0, '%');
+    if (!(naked > dressed + 0.1)) { failures++; log('✗ anti-aim should visibly cost the resolver — it barely did'); }
+    if (!(dressed < 0.45)) { failures++; log('✗ a maxed anti-aim should beat the resolver more often than not'); }
+    if (!(naked < 0.75)) { failures++; log('✗ the resolver is still doing too much work on its own'); }
+    if (!(afterShot > 0.85)) { failures++; log('✗ an un-hidden shot pins the real angles — that read should be near-certain'); }
+    if (off !== 0) { failures++; log('✗ resolver off must never beat a desync'); }
+    if (combat.aaQuality(human) !== 0 && !human.cheats.antiaim.on) { failures++; log('✗ anti-aim that is switched off cannot be protecting anyone'); }
+    human.cheats.resolver = savedRes; foe.cheats.antiaim = savedAA; foe._desyncOff = null;
+  }
+
+  // --- local shot lines fade over the configured duration and clean themselves up ---
+  {
+    const fx = await import('../src/effects.js');
+    const THREE = await import('three');
+    fx.clearEffects();                       // the 250 shots above left their own lines behind — start from nothing
+    fx.addShotLine(new THREE.Vector3(0, 0, 0), new THREE.Vector3(0, 0, -100), 1.5, '#ff4d6d');
+    if (fx.shotLines.length !== 1) { failures++; log('✗ addShotLine should add a line'); }
+    fx.updateEffects(0.75);
+    const half = fx.shotLines[0] && fx.shotLines[0].l.material.opacity;
+    if (!(half > 0.4 && half < 0.6)) { failures++; log('✗ a shot line should be half faded at half its lifetime, got ' + half); }
+    fx.updateEffects(0.8);
+    if (fx.shotLines.length !== 0) { failures++; log('✗ a shot line should be gone once its duration is up'); }
+    log('  shot lines: added, faded to', Number(half).toFixed(2), 'at 0.75s of 1.5s, removed at the end');
+  }
+
+  // --- every switch in the cheat menu, checked for an observable effect ---
+  {
+    const rows = HVH.verifyCheats({ log: false });
+    for (const r of rows) log(`  ${r.ok ? '✓' : '✗'} ${r.feature} — ${r.detail}`);
+    const bad = rows.filter(r => !r.ok);
+    if (bad.length) { failures += bad.length; log(`✗ ${bad.length}/${rows.length} cheat features are not wired up`); }
+    else log(`✓ all ${rows.length} cheat features verified end to end`);
   }
 
   // penetration: thin wall reduces, absurdly thick wall blocks

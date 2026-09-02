@@ -6,17 +6,18 @@ import { scene, camera, renderer } from './core.js';
 import { WEAPONS, TEAM, INACC, LAND_RECOVER, JUMP_VEL, BHOP_GAIN, BHOP_MAX, ECON, computeDamage } from './data.js';
 import { agents, refs, GAME, vm, clock, keys, input } from './state.js';
 import { WALLS, NODES, EDGES, segAABB, losClear, penetrate } from './world.js';
-import { updateEffects, nadeProjectiles } from './effects.js';
+import { updateEffects, nadeProjectiles, shotLines } from './effects.js';
 import { setViewmodel, updateAgentVisual, updateBacktrackGhosts, hitboxCenter, eyePos } from './agents.js';
 import { manualFire, aimbotFire, fireWeaponCommon, fireDoubleTap, meleeAttack, moveAgent, computeBloom, startReload, finishReload, switchTo, selectBest, visibleTo, autoStopScale, recordTick, updateTickbase, beginSimFrame } from './combat.js';
 import { botThink } from './ai.js';
+import { verifyCheats } from './selftest.js';
 import {
   openBuy, closeBuy, beginBuyToLive, awardWin, endRoundAdvance, startRound, buildTeams,
   updateHostages, updateNades, updateAreas, tryRescueInteract, equipGrenade, throwNade, liveHostages,
 } from './game.js';
 import {
   updateAllHUD, updateTopHUD, updatePlayerHUD, updateTeamStatus, updateHUDWeapons, drawRadar,
-  updateESP, updateReloadRing, updateBloomRing, updateScopeOverlay, updateR8Hammer,
+  updateESP, updateReloadRing, updateBloomRing, updateHitChanceHUD, updateScopeOverlay, updateR8Hammer,
   renderScoreboard, centerMessage, showHint, showHintOnce, formatTime, buildCrosshair, anyPanelOpen, audio, setBeepMute, playBeep,
 } from './hud.js';
 import { toggleCheatMenu, buildCheatMenu, loadConfig, saveConfig, syncCheatUI } from './cheats.js';
@@ -202,7 +203,7 @@ function humanShoot(dt) {
     const wp8 = human.weapons.r8; if (!wp8) return; const c8 = human.cheats; const COCK = WEAPONS.r8.cockTime || 0.25;
     if (rmb) {
       human.r8Charge = 0;
-      if (human.fireCd <= 0) { if (wp8.ammo <= 0) { startReload(human); return; } human.fireMode = "fan"; sfxRevolverCock(); fireWeaponCommon(human); manualFire(human); fireDoubleTap(human, () => manualFire(human)); updateHUDWeapons(); }   // fan: cock + fire each shot (spams the cock)
+      if (human.fireCd <= 0) { if (wp8.ammo <= 0) { startReload(human); return; } human.fireMode = "fan"; sfxRevolverCock(); fireWeaponCommon(human); manualFire(human); updateHUDWeapons(); }   // fan: cock + fire each shot (spams the cock). No fireDoubleTap — the R8 is excluded from double tap (see NO_DOUBLE_TAP)
       return;
     }
     if (c8.aimbot.on && c8.aimbot.autoRevolver) {
@@ -234,7 +235,7 @@ function humanShoot(dt) {
     if (md) {
       human.r8Charge = Math.min(1, (human.r8Charge || 0) + dt / COCK);
       if (human.r8Charge >= 0.95 && !human.r8Cocked) { human.r8Cocked = true; sfxRevolverCock(); }
-      if (human.r8Charge >= 1 && human.fireCd <= 0) { if (wp8.ammo <= 0) { startReload(human); human.r8Charge = 0; human.r8Cocked = false; return; } human.fireMode = "primary"; fireWeaponCommon(human); manualFire(human); fireDoubleTap(human, () => manualFire(human)); human.r8Charge = 0; human.r8Cocked = false; updateHUDWeapons(); }
+      if (human.r8Charge >= 1 && human.fireCd <= 0) { if (wp8.ammo <= 0) { startReload(human); human.r8Charge = 0; human.r8Cocked = false; return; } human.fireMode = "primary"; fireWeaponCommon(human); manualFire(human); human.r8Charge = 0; human.r8Cocked = false; updateHUDWeapons(); }   // the revolver never doubles — its hammer cock is not a next-attack check to shift past
     } else { human.r8Charge = Math.max(0, (human.r8Charge || 0) - dt / COCK * 2); human.r8Cocked = false; }
     return;
   }
@@ -328,7 +329,7 @@ export function step(dt, extra) {
   updateHostages(dt); updateNades(dt); updateAreas(dt); updateEffects(dt);
   for (const a of agents) updateAgentVisual(a);
   updateBacktrackGhosts(dt);
-  updateESP(); updateReloadRing(); updateBloomRing(); updateScopeOverlay(); updateR8Hammer(); updateSpecBanner();
+  updateESP(); updateReloadRing(); updateBloomRing(); updateHitChanceHUD(); updateScopeOverlay(); updateR8Hammer(); updateSpecBanner();
   updateCamera();
   updateTopHUD(); updatePlayerHUD(); updateTeamStatus(); updateHUDWeapons();
   $("#roundTimer").textContent = formatTime(GAME.phase === "buy" ? GAME.freeze : GAME.timer);
@@ -474,7 +475,8 @@ function boot() {
 window.HVH = {
   get GAME() { return GAME; }, get agents() { return agents; }, get human() { return refs.human; },
   WEAPONS, ECON, computeDamage, WALLS, NODES, EDGES, segAABB, losClear, penetrate, camera, scene, renderer, meshBackend,
-  deploy, deploySource, editorDebug,
+  get shotLines() { return shotLines; },
+  deploy, deploySource, editorDebug, verifyCheats,
   fastForward(secs) { const dt = 1 / 60; let t = 0; while (t < secs) { step(dt); t += dt; } return { phase: GAME.phase, score: [GAME.scoreCT, GAME.scoreT] }; },
   computeBloom(a) { return computeBloom(a || refs.human); },
   testGrenade() { refs.human.nades = { he: 1, flash: 1 }; equipGrenade(); const eq = refs.human.equippedNade; const before = nadeProjectiles.length; const ok = throwNade(refs.human, eq); return { equipped: eq, threw: ok, projectilesBefore: before, projectilesAfter: nadeProjectiles.length, remaining: refs.human.nades[eq] }; },

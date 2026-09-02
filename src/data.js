@@ -91,6 +91,7 @@ export const SHIFT_MAX_TICKS = 16, HIDE_SHOT_COST = 8, SHIFT_REGEN = 0.25;   // 
      · DOUBLE TAP shifts your tickbase FORWARD past the weapon's next-attack check, so two commands
        both pass it and two bullets land in one server frame.  It costs as many banked ticks as the
        weapon's fire cycle is long, which is why bolt-actions (SSG: 80 ticks) simply can't be doubled.
+       The R8 can't either, for a different reason — see NO_DOUBLE_TAP below.
      · HIDE SHOTS shifts the tickbase BACKWARD so the shot is processed on a tick where your fake angle
        was still up.  Opposite direction — a shot cannot be shifted both ways, so you get one or the
        other per shot, never both.  Every cheat menu resolves this the same way: double tap wins, and
@@ -102,9 +103,15 @@ export function weaponCycle(key, fireMode) {
   if (key === "r8") return fireMode === "fan" ? (w.cycleFan || 0.30) : (w.cyclePrimary || 0.25);
   return w.rpm ? 60 / w.rpm : 0;
 }
+/* Weapons no cheat will double tap, whatever the tick budget says.  The R8's trigger is not a plain
+   next-attack timestamp — it is a hammer-cock state machine (the shot is postponed until the cock
+   completes), so shifting the tickbase forward past the attack check does not buy a second round; it
+   just eats the bank.  Every HvH cheat excludes the revolver for that reason, so this one does too. */
+export const NO_DOUBLE_TAP = new Set(["r8"]);
 /* Ticks of forward shift needed to double-tap this weapon, or 0 if it can't be doubled.
-   duals 10 · usp/glock 13 · deagle 15 · scar/g3/r8 16 · ssg 80 (over budget) · knife n/a */
+   duals 10 · usp/glock 13 · deagle 15 · scar/g3 16 · r8 excluded · ssg 80 (over budget) · knife n/a */
 export function dtTicks(key, fireMode) {
+  if (NO_DOUBLE_TAP.has(key)) return 0;
   const c = weaponCycle(key, fireMode); if (!c) return 0;
   const t = Math.ceil(c / TICK);
   return t <= SHIFT_MAX_TICKS ? t : 0;

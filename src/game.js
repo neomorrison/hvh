@@ -61,6 +61,7 @@ export function resetAgentForRound(a, spawn) {
   a.equippedNade = null; a.firePenalty = 0; a.hurtBloom = 0; a.landBloom = 0; a.onGround = true;
   a.trail = []; a._tick = 0; a._recAcc = 0; a._btMark = null;              // nobody may rewind into last round
   a.exposeT = 0; a.hideFx = 0; a.shiftCharge = SHIFT_MAX_TICKS; a.shiftUsed = 0; a.shiftMode = null; a._sideT = 0; a._dtPending = false;
+  a._lastExpose = null; a._sideStamp = 0; a._randYaw = 0; if (a._brute) a._brute.clear();   // nobody carries last round's resolver read into this one
   a.desyncSide = Math.random() < 0.5 ? 1 : -1;                             // and don't start every round on the same fake side
   a.aiPath = []; a.aiTimer = 0; a.aiStuck = 0; a.aiLastSeen = null; a.aiLastSeenT = 0; a.aiNoContact = 0;   // clear stale AI state so no bot chases a dead position
   a.boughtThisBuy = {};                                    // reset same-buy sellback tracking
