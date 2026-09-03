@@ -3,7 +3,7 @@
    path on both cs_office and any custom (grid-nav) level.                  */
 import * as THREE from 'three';
 import { WEAPONS, TEAM, JUMP_VEL } from './data.js';
-import { NODES, EDGES, RESCUE_ZONES, MAP_BOUNDS, astar, nearestNode, losClear } from './world.js';
+import { NODES, EDGES, RESCUE_ZONES, MAP_BOUNDS, CT_SPAWNS, T_SPAWNS, astar, nearestNode, losClear } from './world.js';
 import { hitboxCenter, eyePos } from './agents.js';
 import { agents, GAME, clock } from './state.js';
 import { aimbotFire, moveAgent, meleeAttack, visibleTo, startReload, giveWeapon, hasAnyAmmo, autoStopScale, applyFakeDuck, baseMoveSpeed } from './combat.js';
@@ -33,7 +33,10 @@ export function botBuy(a) {
   if (a.money >= 300 && !(a.nades.smoke > 0) && Math.random() < 0.45) { a.nades.smoke = 1; a.money -= 300; }
 }
 
-const SEP_RADIUS = 56;   // ~one node-spacing; tight enough that spawn crowds don't shove each other into walls
+// Twelve bots at 56u of separation is twelve bots standing on top of each other: a player is 32u wide,
+// so that radius only ever unstuck a literal overlap. At 150 a squad actually occupies a frontage.
+const SEP_RADIUS = 150;
+const SEP_ROAM = 0.9, SEP_FIGHT = 0.3;   // spread hard while moving; barely at all mid-fight, where the strafe matters
 
 function separation(a) {
   let sx = 0, sz = 0, n = 0;
@@ -75,10 +78,10 @@ export function restoreAllEdges() {                            // round start: n
 
 // move along `dir` (blended with teammate separation) with stuck detection: hop a
 // ledge/step, and if still wedged give up and repath.
-function botMove(a, dir, dt, combat) {
+function botMove(a, dir, dt, combat, sepW) {
   const sep = separation(a);
   const d = dir.clone().setY(0);
-  if (sep) d.add(sep.multiplyScalar(0.35));   // weaker separation: it must nudge, not override the goal into a wall
+  if (sep) d.add(sep.multiplyScalar(sepW != null ? sepW : SEP_FIGHT));
   if (d.lengthSq() > 1e-4) d.normalize();
   const before = a.pos.clone();
   moveAgent(a, d, dt, combat);
@@ -113,13 +116,13 @@ function botMove(a, dir, dt, combat) {
 
 // follow the a* path, skipping ahead to the furthest node with clear line of sight
 // so bots cut straight across open rooms instead of zig-zagging between grid cells.
-function followPath(a, dt, combat) {
+function followPath(a, dt, combat, sepW) {
   if (!a.aiPath.length || !NODES[a.aiPath[0]]) { a.aiPath = []; return; }
   while (a.aiPath.length > 1 && NODES[a.aiPath[1]] && losClear(eyePos(a), NODES[a.aiPath[1]].p)) a.aiPath.shift();
   const to = NODES[a.aiPath[0]].p.clone().sub(a.pos); to.y = 0;
   if (to.length() < 44) { a.aiPath.shift(); return; }   // tighter arrival to match the denser nav grid
   a.yaw = Math.atan2(-to.x, -to.z);
-  botMove(a, to.normalize(), dt, combat);
+  botMove(a, to.normalize(), dt, combat, sepW);
 }
 
 // path to a goal node. If it's unreachable (A* returns a 1-node degenerate path) flag aiPathFail so
@@ -139,6 +142,7 @@ export function botThink(a, dt) {
   applyFakeDuck(a);              // a bot running fake duck is really ducked too — same stance, same cost
   healEdges();   // restore any temporary nav cuts whose cooldown elapsed (keeps CT<->T connected)
   a.aiTimer -= dt;
+  a.aiClock = (a.aiClock || 0) + dt;      // time since the round started — drives the staggered push
   a.speedScale = 1;
   const enemies = agents.filter(t => t.alive && t.team !== a.team);
   // OUT OF AMMO → auto-knife: hunt nearest enemy and slash
@@ -187,7 +191,7 @@ export function botThink(a, dt) {
       // slow-down is abandoned entirely and the bot just goes and finds a real angle. Otherwise a bot
       // that can "see" someone through cover crawls in a corner indefinitely.
       a._wallHold = (a._wallHold || 0) + dt;
-      if (a.cheats.aimbot.on && a.cheats.aimbot.autoStop && a._wallHold < 1.5) a.speedScale = Math.max(0.3, autoStopScale(a, true));
+      if (a.cheats.aimbot.autoStop && a._wallHold < 1.5) a.speedScale = Math.max(0.3, autoStopScale(a, true, true));
       followPath(a, dt, true);
       aimbotFire(a);                                  // still try — autowall punches thin walls; thick ones just won't fire
     } else {
@@ -201,7 +205,10 @@ export function botThink(a, dt) {
       else desired = bestd > 300 ? dirTo.clone().setY(0).normalize() : right.clone().multiplyScalar(a.aiStrafe);   // peek/passive now commit to a push at mid-range instead of camping
       // AUTO-STOP: shed exactly the speed the bot's own min hit chance needs — no more. Same helper the
       // player's auto-stop uses, so a bot doesn't plant like a statue when a light slow would do.
-      a.speedScale = (a.cheats.aimbot.on && a.cheats.aimbot.autoStop) ? autoStopScale(a, true) : ((bestd > 360) ? 1 : 0.28);
+      // Bots always pass keepClosing: planting only pays when planting actually buys the shot. Rooted on
+      // a shot that a dead stop still can't make, a bot stands there forever — it can never improve,
+      // because standing still was already its best option. Closing the gap can.
+      a.speedScale = a.cheats.aimbot.autoStop ? autoStopScale(a, true, true) : ((bestd > 360) ? 1 : 0.28);
       botMove(a, desired, dt, true);
       aimbotFire(a);
     }
@@ -216,54 +223,108 @@ export function botThink(a, dt) {
       a.aiLastSeen = null;
       if (needRepath(a)) { pickGoal(a); a.aiTimer = 2 + Math.random() * 2; }
     }
-    followPath(a, dt, false);
+    followPath(a, dt, false, SEP_ROAM);
+    // A HOLDER that has arrived plants on its angle and watches it instead of drifting on into the pile.
+    // This is the single biggest reason the team stops arriving everywhere as one body.
+    if (a.aiRole === "hold" && !a.aiPath.length && (a.aiNoContact || 0) < 7) {
+      a.aiTimer = Math.max(a.aiTimer, 2.5);
+      const look = a.aiLastSeen || enemyAnchor(a);
+      if (look) { a.yaw = Math.atan2(-(look.x - a.pos.x), -(look.z - a.pos.z)); a.realYaw = a.yaw; }
+    }
     const wp = a.weapons[a.cur]; if (wp && wp.ammo <= 2 && wp.reserve > 0 && a.reloadT <= 0) startReload(a);
   }
 }
 
-let _roamOrder = null, _roamLen = -1;
-function roamOrder() {   // node ids sorted along the map's long axis (memoized per map load)
-  if (_roamOrder && _roamLen === NODES.length) return _roamOrder;
-  const lx = (MAP_BOUNDS.maxX - MAP_BOUNDS.minX) >= (MAP_BOUNDS.maxZ - MAP_BOUNDS.minZ);
-  _roamOrder = NODES.map(n => n.id).sort((u, v) => lx ? NODES[u].p.x - NODES[v].p.x : NODES[u].p.z - NODES[v].p.z);
-  _roamLen = NODES.length; return _roamOrder;
+/* ---- squad roles ----
+   Every bot ran the identical routine — "walk at the nearest enemy" — so a 12-man team left spawn as one
+   blob, arrived at one doorway, and died in one grenade. Roles and lanes are assigned per round: a pusher
+   takes ground, a holder plants on an angle and watches it, a flanker works the side of the map its own
+   team is NOT crowding. Departures are staggered so nobody leaves at the same second. */
+export function assignRoles() {
+  for (const side of [TEAM.CT, TEAM.T]) {
+    const list = agents.filter(a => a.team === side);
+    for (let i = list.length - 1; i > 0; i--) { const j = (Math.random() * (i + 1)) | 0; [list[i], list[j]] = [list[j], list[i]]; }
+    list.forEach((a, i) => {
+      a.aiRole = ["push", "hold", "push", "flank", "push", "push"][i % 6];
+      a.aiLane = (i + 0.5) / list.length;                  // a stable LATERAL lane for the round
+      // Keep the stagger short: the lanes do the spreading, and a long one only makes rounds crawl.
+      a.aiPushAt = (a.aiRole === "push" ? 0.5 : 2) + Math.random() * 4;
+      a.aiClock = 0; a.aiHoldSpot = null;
+    });
+  }
 }
-function botIndex(a) { if (a._botIdx == null) a._botIdx = agents.indexOf(a); return a._botIdx; }
-// a patrol node for THIS bot: own a slowly-drifting BAND of the map (by stable index) and, within it,
-// pick the node FARTHEST from living teammates — so idle bots fan across the whole map and explore
-// instead of all funnelling to the centre and clumping.
-function roamNode(a) {
-  const order = roamOrder(); if (!order.length) return 0;
-  const team = agents.filter(t => t.team === a.team && !t.isHuman).length || 1;
-  const phase = (clock.t / 11 + botIndex(a) * 0.37) % 1;
-  const base = (((botIndex(a) % team) / team) + phase) % 1;
-  const bi = Math.min(order.length - 1, Math.max(0, Math.floor(base * order.length)));
-  let best = order[bi], bestScore = -1e9;
-  for (let k = -2; k <= 2; k++) {
-    const id = order[((bi + k) % order.length + order.length) % order.length];
-    let mind = 1e9; for (const m of agents) { if (m === a || !m.alive || m.team !== a.team) continue; const d = NODES[id].p.distanceToSquared(m.pos); if (d < mind) mind = d; }
-    if (mind > bestScore) { bestScore = mind; best = id; }
+
+/* Lanes run ACROSS the map, depth runs along it. Slicing the map along the axis the two teams attack
+   along makes a "lane" a depth band instead — the bot on band 0.1 sits in its own spawn all round and
+   the one on 0.9 stands in the enemy's face, so the teams spread out and never meet. Keeping the two
+   separate is what lets a team fan out sideways while still advancing. */
+let _lanes = null, _lanesLen = -1, _ctAtLow = true;
+function laneTable() {
+  if (_lanes && _lanesLen === NODES.length) return _lanes;
+  const lx = (MAP_BOUNDS.maxX - MAP_BOUNDS.minX) >= (MAP_BOUNDS.maxZ - MAP_BOUNDS.minZ);
+  const aLo = lx ? MAP_BOUNDS.minX : MAP_BOUNDS.minZ, aHi = lx ? MAP_BOUNDS.maxX : MAP_BOUNDS.maxZ;
+  const cLo = lx ? MAP_BOUNDS.minZ : MAP_BOUNDS.minX, cHi = lx ? MAP_BOUNDS.maxZ : MAP_BOUNDS.maxX;
+  const aSpan = Math.max(1, aHi - aLo), cSpan = Math.max(1, cHi - cLo);
+  _lanes = NODES.map(n => ({ id: n.id, a: ((lx ? n.p.x : n.p.z) - aLo) / aSpan, c: ((lx ? n.p.z : n.p.x) - cLo) / cSpan }));
+  let sum = 0; for (const p of CT_SPAWNS) sum += (lx ? p.x : p.z);
+  _ctAtLow = !CT_SPAWNS.length || ((sum / CT_SPAWNS.length) - aLo) / aSpan < 0.5;
+  _lanesLen = NODES.length;
+  return _lanes;
+}
+const depthOf = (a, rec) => ((a.team === TEAM.CT) === _ctAtLow ? rec.a : 1 - rec.a);   // 0 = our end, 1 = theirs
+function pickNode(a, lane, depth, laneW, depthW) {
+  const tab = laneTable(); if (!tab.length) return 0;
+  let best = tab[0].id, bestS = -1e18;
+  for (const rec of tab) {
+    const sc = -(Math.abs(rec.c - lane) * laneW + Math.abs(depthOf(a, rec) - depth) * depthW) + Math.random() * 0.03;
+    if (sc > bestS) { bestS = sc; best = rec.id; }
   }
   return best;
 }
+function flankLane(a) {                                     // the side of the map our own team is not using
+  const tab = laneTable(); if (!tab.length) return 0.5;
+  const lx = (MAP_BOUNDS.maxX - MAP_BOUNDS.minX) >= (MAP_BOUNDS.maxZ - MAP_BOUNDS.minZ);
+  const cLo = lx ? MAP_BOUNDS.minZ : MAP_BOUNDS.minX, cHi = lx ? MAP_BOUNDS.maxZ : MAP_BOUNDS.maxX;
+  let sum = 0, n = 0;
+  for (const m of agents) { if (m === a || !m.alive || m.team !== a.team) continue; sum += ((lx ? m.pos.z : m.pos.x) - cLo) / Math.max(1, cHi - cLo); n++; }
+  return (n ? sum / n : 0.5) < 0.5 ? 0.82 + Math.random() * 0.15 : 0.03 + Math.random() * 0.15;
+}
+function enemyAnchor(a) {                                   // roughly where the other team comes from
+  const sp = a.team === TEAM.CT ? T_SPAWNS : CT_SPAWNS;
+  if (!sp.length) return null;
+  let x = 0, z = 0; for (const p of sp) { x += p.x; z += p.z; }
+  return new THREE.Vector3(x / sp.length, 0, z / sp.length);
+}
+const botIndex = a => (a._botIdx != null ? a._botIdx : (a._botIdx = agents.indexOf(a)));
+function roamNode(a) {                                      // fallback wander: own lane, drifting depth
+  const lane = a.aiLane != null ? a.aiLane : ((botIndex(a) % 12) + 0.5) / 12;
+  const depth = 0.5 + Math.sin(clock.t * 0.12 + botIndex(a) * 1.7) * 0.28;
+  return pickNode(a, lane, depth, 1.0, 0.9);
+}
+
 export function pickGoal(a) {
-  let goalNode;
   const enemies = agents.filter(t => t.alive && t.team !== a.team);
-  let near = null, nd = 1e9; for (const e of enemies) { const d = a.pos.distanceToSquared(e.pos); if (d < nd) { nd = d; near = e; } }
-  // hvh deathmatch: hunt the nearest enemy so teams meet and trade, but only ~2 bots may converge on the
-  // SAME enemy (the rest spread); aiNoContact still escalates the hunt (anti-camp) and lateCT must push the
-  // clock down (anti-stalemate). Otherwise FAN OUT to a distinct patrol region (roamNode) so bots explore.
-  const huntP = Math.min(0.92, 0.5 + (a.aiNoContact || 0) * 0.06);
-  const lateCT = a.team === TEAM.CT && GAME.phase === "live" && GAME.timer < 35;
+  let near = null, nd = 1e9;
+  for (const e of enemies) { const d = a.pos.distanceToSquared(e.pos); if (d < nd) { nd = d; near = e; } }
+  let role = a.aiRole || "push";
+  const stale = a.aiNoContact || 0;
+  const lateCT = a.team === TEAM.CT && GAME.phase === "live" && GAME.timer < 40;
+  if (stale > 7 || lateCT) role = "push";                   // a holder nobody came for stops holding
   let hunters = 0; if (near) for (const m of agents) { if (m !== a && m.team === a.team && m.alive && m.aiTarget === near) hunters++; }
-  if (near && hunters < 2 && (lateCT || (a.aiNoContact || 0) > 6 || Math.random() < huntP)) {
-    goalNode = nearestNode(near.pos);
-  } else if (a.team === TEAM.CT && a.carrying && RESCUE_ZONES.length) {
-    goalNode = nearestNode(new THREE.Vector3(RESCUE_ZONES[0].x, 0, RESCUE_ZONES[0].z));
-  } else if (Math.random() < 0.3 && liveHostages().length) {
-    const hs = liveHostages(); goalNode = nearestNode(hs[(Math.random() * hs.length) | 0].pos);   // sometimes patrol an objective
-  } else {
-    goalNode = roamNode(a);                                                                       // fan out to explore
+
+  // Anti-stalemate first: a quiet round, or a CT running out of clock, overrides roles entirely.
+  if (near && hunters < 3 && (lateCT || stale > 8)) return navTo(a, nearestNode(near.pos));
+  // Otherwise only pushers converge on an enemy, only after their own staggered start, and never more
+  // than two onto the same one — that is what stops twelve bots arriving at one doorway together.
+  const started = (a.aiClock || 0) > (a.aiPushAt || 0);
+  if (near && hunters < 2 && role === "push" && started && Math.random() < 0.45 + stale * 0.05) return navTo(a, nearestNode(near.pos));
+  if (a.team === TEAM.CT && a.carrying && RESCUE_ZONES.length) return navTo(a, nearestNode(new THREE.Vector3(RESCUE_ZONES[0].x, 0, RESCUE_ZONES[0].z)));
+  if (Math.random() < 0.18 && liveHostages().length) { const hs = liveHostages(); return navTo(a, nearestNode(hs[(Math.random() * hs.length) | 0].pos)); }
+  const lane = a.aiLane != null ? a.aiLane : 0.5;
+  if (role === "flank") return navTo(a, pickNode(a, flankLane(a), 0.78, 1.4, 0.9));
+  if (role === "hold") {
+    if (a.aiHoldSpot == null) a.aiHoldSpot = pickNode(a, lane, 0.44, 1.2, 1.0);      // midfield angle in our own lane
+    return navTo(a, a.aiHoldSpot);
   }
-  navTo(a, goalNode);
+  return navTo(a, pickNode(a, lane, started ? 0.86 : 0.6, 1.0, 1.4));                // push: take our lane deep
 }

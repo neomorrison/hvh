@@ -196,6 +196,12 @@ try {
     log('  auto-stop speed scale at 100u/400u/550u:', JSON.stringify(seen));
     if (seen[0] !== 1) { failures++; log('✗ auto-stop should not slow a point-blank shot at all'); }
     if (!seen.some(v => v > 0 && v < 1)) { failures++; log('✗ auto-stop should slow proportionally, not hard-stop'); }
+    // Past the range the hit chance is reachable at all it must PLANT, not quietly hand back full speed:
+    // returning 1 there switched auto-stop off in exactly the situations you turned it on for.
+    human.cheats.aimbot.hitchance = 99; foe.pos.set(0, 0, -1600); human.vel.set(0, 0, 0); combat.beginSimFrame();
+    if (combat.autoStopScale(human, false) !== 0) { failures++; log('✗ an unreachable hit chance should plant the player, not return full speed'); }
+    if (combat.autoStopScale(human, false, true) !== 1) { failures++; log('✗ keepClosing should let a bot close the gap instead of rooting on an impossible shot'); }
+    human.cheats.aimbot.hitchance = 50;
     human.cur = 'knife';
     combat.beginSimFrame();
     if (combat.autoStopScale(human, false) !== 1) { failures++; log('✗ auto-stop must never engage on the knife'); }
@@ -321,6 +327,16 @@ try {
     const bad = rows.filter(r => !r.ok);
     if (bad.length) { failures += bad.length; log(`✗ ${bad.length}/${rows.length} cheat features are not wired up`); }
     else log(`✓ all ${rows.length} cheat features verified end to end`);
+  }
+
+  // --- bots draw distinct roles and lanes rather than sharing one plan ---
+  {
+    const roles = {};
+    for (const a of HVH.agents) roles[a.aiRole] = (roles[a.aiRole] || 0) + 1;
+    const lanes = new Set(HVH.agents.map(a => a.aiLane));
+    log('  bot roles:', JSON.stringify(roles), '· distinct lanes:', lanes.size);
+    if (!(roles.push > 0 && roles.hold > 0 && roles.flank > 0)) { failures++; log('✗ every round should field pushers, holders and flankers'); }
+    if (lanes.size < 8) { failures++; log('✗ bots should hold distinct lanes, not stack on one'); }
   }
 
   // penetration: thin wall reduces, absurdly thick wall blocks

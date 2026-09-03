@@ -178,7 +178,9 @@ function humanMove(dt) {
   // AUTO-STOP: shed exactly enough speed to reach the configured min hit chance — not a dead stop.
   // autoStopScale() solves for the largest speed whose bloom still makes the shot canShoot() picked,
   // so a close-range shot barely slows you and only a long one plants you. Knife is excluded inside.
-  if (c.aimbot.on && c.aimbot.autoStop && human.onGround) {
+  // Auto-stop is a movement assist, not part of the ragebot — gating it behind aimbot.on meant pressing
+  // F6 on its own silently did nothing.
+  if (c.aimbot.autoStop && human.onGround) {
     const w = WEAPONS[human.cur];
     // don't keep planting between shots on a slow non-auto (SSG/scout bolt cycle) — only stop when actually able to fire now
     const fireReady = human.fireCd <= 0 || (w && w.auto);

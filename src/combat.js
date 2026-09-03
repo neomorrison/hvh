@@ -611,7 +611,7 @@ export function baseMoveSpeed(a, combat) {
   if (a.bhopBoost) speed *= Math.min(BHOP_MAX, a.bhopBoost);
   return speed;
 }
-export function autoStopScale(a, combat) {
+export function autoStopScale(a, combat, keepClosing) {
   const w = WEAPONS[a.cur];
   if (!w || w.melee) return 1;                                     // never auto-stop on the knife
   const wp = a.weapons[a.cur];
@@ -623,7 +623,12 @@ export function autoStopScale(a, combat) {
   const vx = a.vel.x, vz = a.vel.z, full = baseMoveSpeed(a, combat);
   const accAt = sc => { a.vel.x = full * sc; a.vel.z = 0; const acc = computeAccuracy(a, cs.aimPoint, cs.body, cs.group, cs.exposure); a.vel.x = vx; a.vel.z = vz; return acc; };
   if (accAt(1) >= need) return 1;                                  // already accurate enough at full speed
-  if (accAt(0) < need) return 1;                                   // even planted this shot isn't makeable — don't root for nothing, keep closing
+  // Even planted, this shot doesn't reach the configured hit chance. Slowing is never WORSE for accuracy,
+  // so for a player who switched auto-stop on the answer is still "plant": returning full speed here
+  // silently switched auto-stop off at exactly the ranges you wanted it, which is why it read as doing
+  // nothing. A bot crossing open ground would genuinely rather close than root for an impossible shot —
+  // that judgement belongs to movement, so callers who want it pass keepClosing.
+  if (accAt(0) < need) return keepClosing ? 1 : 0;
   let lo = 0, hi = 1;
   for (let i = 0; i < 8; i++) { const mid = (lo + hi) / 2; if (accAt(mid) >= need) lo = mid; else hi = mid; }
   return lo;

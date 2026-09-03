@@ -7,7 +7,7 @@ import { TEAM, ECON, WEAPONS, NADES, ARMOR, EYE_STAND, GRAVITY, SHIFT_MAX_TICKS 
 import { CT_SPAWNS, T_SPAWNS, HOSTAGE_SPAWNS, RESCUE_ZONES, losClear } from './world.js';
 import { spawnAgent, applyPersona, BOT_PERSONAS, recolorAgent, eyePos, hitboxCenter, setViewmodel } from './agents.js';
 import { giveWeapon, selectBest, switchTo, killAgent } from './combat.js';
-import { botBuy, restoreAllEdges } from './ai.js';
+import { botBuy, restoreAllEdges, assignRoles } from './ai.js';
 import { agents, refs, GAME, FREEZE_TIME, ROUND_TIME, END_TIME, BUY_TIME } from './state.js';
 import { meshBackend } from './sourcemap.js';
 import { clearEffects, addExplosion, smokes, fires, nadeProjectiles } from './effects.js';
@@ -34,6 +34,7 @@ export function startRound() {
   GAME.phase = "buy"; GAME.freeze = FREEZE_TIME; GAME.buyTimer = BUY_TIME; GAME.timer = ROUND_TIME; GAME.winner = null; GAME.rescued = 0;
   clearEffects();
   restoreAllEdges();   // heal any nav edges bots temporarily cut last round — start every round fully connected
+  assignRoles();       // fresh push/hold/flank split and lanes, so the same twelve bots don't replay one plan
   const ctList = agents.filter(a => a.team === TEAM.CT), tList = agents.filter(a => a.team === TEAM.T);
   ctList.forEach((a, i) => resetAgentForRound(a, CT_SPAWNS[i % CT_SPAWNS.length]));
   tList.forEach((a, i) => resetAgentForRound(a, T_SPAWNS[i % T_SPAWNS.length]));
