@@ -12,7 +12,7 @@
      nades.glb   : roots he, flash, smoke, molly.                                            */
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
-import { SkeletonUtils } from 'three/addons/utils/SkeletonUtils.js';
+import * as SkeletonUtils from 'three/addons/utils/SkeletonUtils.js';   // r160 exports clone/retarget as named functions, no namespace object
 
 export const MODELS = { player: null, playerClips: null, weapons: null, nades: null, ready: false };
 export const CLIPS = ['idle', 'walk', 'run', 'crouch_idle', 'crouch_walk'];

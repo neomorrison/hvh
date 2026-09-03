@@ -6,4 +6,5 @@ export class GLTFLoader {
   load(url, onLoad, onProgress, onError) { if (onError) onError(new Error('stub: no GLB in node')); }
   async loadAsync() { throw new Error('stub: no GLB in node'); }
 }
-export const SkeletonUtils = { clone(o) { return o && o.clone ? o.clone(true) : o; } };
+// SkeletonUtils.js exports these as named functions (imported via `import * as SkeletonUtils`)
+export function clone(o) { return o && o.clone ? o.clone(true) : o; }
