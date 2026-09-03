@@ -4,7 +4,7 @@
    visual update (anti-aim twist, crouch, held weapon, chams).             */
 import * as THREE from 'three';
 import { scene, camera } from './core.js';
-import { TEAM, WEAPONS, ECON, EYE_STAND } from './data.js';
+import { TEAM, WEAPONS, ECON, EYE_STAND, EYE_CROUCH, MAX_BACKTRACK_TICKS, SHIFT_MAX_TICKS } from './data.js';
 import { agents, refs, vm, clock, GAME } from './state.js';
 import { losClear } from './world.js';
 import { makeBodyGLB, updateBodyGLB, buildWeaponModelGLB } from './models.js';
@@ -110,39 +110,61 @@ export function setViewmodel(key, isNade) {
 
 export function defaultCheats(aggressive) {
   return {
-    aimbot: { on: aggressive, fov: aggressive ? 180 : 30, hitchance: aggressive ? 78 : 50, minDmg: 1, silent: true,
-      autoShoot: aggressive, autoScope: true, autoStop: aggressive, autoKnife: aggressive, autoRevolver: true, target: "crosshair", priority: "head", forceBody: false, baimLethal: false, safepoint: false },
+    // hitchance is a MIN-hit-chance gate for everyone now (bots included): hold fire until the live
+    // bloom cone actually makes the shot. 40% / 30 min damage are the "average values that work" —
+    // strong enough that a bot trades properly, loose enough that it still shoots on a pistol round.
+    aimbot: { on: aggressive, fov: 180, hitchance: aggressive ? 40 : 50, minDmg: aggressive ? 30 : 1, silent: true,
+      autoShoot: aggressive, autoScope: true, autoStop: aggressive, autoKnife: aggressive, autoRevolver: true, target: "crosshair", priority: "head", forceBody: false, baimLethal: false, safepoint: false,
+      // hitchance/minDmg/priority above are the MASTER values. `weapons` holds per-weapon overrides —
+      // only the keys a weapon actually overrides are stored, so raising the master still moves every
+      // gun you have not explicitly pinned. See aimCfg().
+      weapons: {} },
     autowall: { on: aggressive, minDmg: 30 },
-    resolver: { on: aggressive, accuracy: 0.7, mode: "animation" },   // accuracy = internal resolve PROBABILITY (no UI slider; bots overridden by persona.res)
-    antiaim: { on: aggressive, yaw: "jitter", jitter: 55, pitch: "down", desync: true, desyncAngle: 58, mode: "at_target", fakeduck: false },
-    tickbase: { backtrack: aggressive ? 200 : 0 },
-    visuals: { esp: false, boxes: true, health: true, name: true, distance: false, snaplines: false, chams: false, desyncGhost: false, chamsVisible: '#ff2a44', chamsOccluded: '#7a4cff' },
+    // strength is the resolver's ceiling, not its answer — see resolveDesync(): a target's anti-aim
+    // cuts it, and only an enemy who fires without hiding the shot gives a read worth `memory` seconds.
+    resolver: { on: aggressive, mode: "animation", strength: 0.6, memory: 0.55 },
+    // fake duck is a BIND, not a state: enabling it here only arms it, and it engages while the key is
+    // held (or between presses in toggle mode). It forces a real crouch, so leaving it permanently on
+    // would leave you walking at a third speed with no way to stand up.
+    antiaim: { on: aggressive, yaw: "jitter", jitter: 55, pitch: "down", desync: true, desyncAngle: 58, mode: "freestanding",
+      fakeduck: false, fakeduckKey: "KeyX", fakeduckMode: "hold" },
+    // backtrack is in TICKS (12 tk @64 = 187ms). doubleTap and hideShots shift the tickbase in opposite
+    // directions, so only one can apply to a given shot — double tap wins when both are on.
+    tickbase: { backtrack: aggressive ? 12 : 0, hideShots: aggressive, doubleTap: false },
+    visuals: { esp: false, boxes: true, health: true, name: true, distance: false, snaplines: false, chams: false, desyncGhost: false, backtrackTrail: false, backtrackGhost: false, chamsVisible: '#ff2a44', chamsOccluded: '#7a4cff',
+      shotLines: true, shotLineTime: 1.5, shotLineHit: '#ff4d6d', shotLineMiss: '#4dc3ff', hitchance: false },
   };
 }
 
+/* Bot personas.  `hitchance` is the bot's MIN hit chance — the same gate the player's menu exposes —
+   so it now reads "how patient is this bot", not "how good is its aim".  Everyone lands shots at the
+   real bloom accuracy; a bot's edge is when it chooses to pull the trigger, how much damage it insists
+   on, how many ticks it rewinds, and whether it hides its shots.  Values cluster around 40% / 30 dmg. */
 export const BOT_PERSONAS = [
-  { name: "lucky", style: "rage", aim: { priority: "head", hitchance: 90, forceBody: false }, res: 0.92, aa: { yaw: "jitter", pitch: "down", desyncAngle: 58 }, wepBias: "deagle" },
-  { name: "vapor", style: "peek", aim: { priority: "head", hitchance: 82, forceBody: false }, res: 0.8, aa: { yaw: "sideways", pitch: "down", desyncAngle: 52 }, wepBias: "ssg" },
-  { name: "ghoul", style: "rage", aim: { priority: "stomach", hitchance: 86, forceBody: true }, res: 0.7, aa: { yaw: "jitter", pitch: "down", desyncAngle: 58 }, wepBias: "scar" },
-  { name: "nyx", style: "passive", aim: { priority: "head", hitchance: 88, forceBody: false }, res: 0.85, aa: { yaw: "spin", pitch: "down", desyncAngle: 58 }, wepBias: "ssg" },
-  { name: "hex", style: "peek", aim: { priority: "head", hitchance: 80, forceBody: false }, res: 0.78, aa: { yaw: "back", pitch: "up", desyncAngle: 48 }, wepBias: "r8" },
-  { name: "prism", style: "rage", aim: { priority: "stomach", hitchance: 84, forceBody: true }, res: 0.74, aa: { yaw: "jitter", pitch: "zero", desyncAngle: 55 }, wepBias: "duals" },
-  { name: "wraith", style: "passive", aim: { priority: "head", hitchance: 91, forceBody: false }, res: 0.9, aa: { yaw: "sideways", pitch: "down", desyncAngle: 58 }, wepBias: "g3" },
-  { name: "jolt", style: "rush", aim: { priority: "head", hitchance: 76, forceBody: false }, res: 0.68, aa: { yaw: "jitter", pitch: "down", desyncAngle: 50 }, wepBias: "deagle" },
-  { name: "cinder", style: "peek", aim: { priority: "head", hitchance: 83, forceBody: false }, res: 0.82, aa: { yaw: "jitter", pitch: "down", desyncAngle: 56 }, wepBias: "deagle" },
-  { name: "onyx", style: "rage", aim: { priority: "stomach", hitchance: 88, forceBody: true }, res: 0.8, aa: { yaw: "spin", pitch: "down", desyncAngle: 58 }, wepBias: "scar" },
-  { name: "dezync", style: "passive", aim: { priority: "head", hitchance: 93, forceBody: false }, res: 0.94, aa: { yaw: "sideways", pitch: "zero", desyncAngle: 58 }, wepBias: "ssg" },
-  { name: "mirage", style: "rush", aim: { priority: "head", hitchance: 79, forceBody: false }, res: 0.72, aa: { yaw: "jitter", pitch: "down", desyncAngle: 54 }, wepBias: "r8" },
+  { name: "lucky", style: "rage", aim: { priority: "head", hitchance: 38, minDmg: 35, forceBody: false }, res: 0.70, resMode: "animation", bt: 14, hide: true, dt: false, aa: { yaw: "jitter", pitch: "down", desyncAngle: 58 }, wepBias: "deagle" },
+  { name: "vapor", style: "peek", aim: { priority: "head", hitchance: 44, minDmg: 30, forceBody: false }, res: 0.62, resMode: "brute", bt: 12, hide: false, dt: true, aa: { yaw: "sideways", pitch: "down", desyncAngle: 52 }, wepBias: "ssg" },
+  { name: "ghoul", style: "rage", aim: { priority: "stomach", hitchance: 34, minDmg: 28, forceBody: true }, res: 0.54, resMode: "animation", bt: 16, hide: false, dt: true, aa: { yaw: "jitter", pitch: "down", desyncAngle: 58 }, wepBias: "scar" },
+  { name: "nyx", style: "passive", aim: { priority: "head", hitchance: 52, minDmg: 34, forceBody: false }, res: 0.66, resMode: "onshot", bt: 10, hide: true, dt: false, aa: { yaw: "spin", pitch: "down", desyncAngle: 58 }, wepBias: "ssg" },
+  { name: "hex", style: "peek", aim: { priority: "head", hitchance: 42, minDmg: 30, forceBody: false }, res: 0.60, resMode: "animation", bt: 12, hide: false, dt: true, aa: { yaw: "back", pitch: "up", desyncAngle: 48 }, wepBias: "r8" },
+  { name: "prism", style: "rage", aim: { priority: "stomach", hitchance: 33, minDmg: 26, forceBody: true }, res: 0.56, resMode: "brute", bt: 14, hide: false, dt: true, aa: { yaw: "jitter", pitch: "zero", desyncAngle: 55 }, wepBias: "duals" },
+  { name: "wraith", style: "passive", aim: { priority: "head", hitchance: 50, minDmg: 38, forceBody: false }, res: 0.70, resMode: "onshot", bt: 8, hide: true, dt: false, aa: { yaw: "sideways", pitch: "down", desyncAngle: 58 }, wepBias: "g3" },
+  { name: "jolt", style: "rush", aim: { priority: "head", hitchance: 30, minDmg: 25, forceBody: false }, res: 0.50, resMode: "animation", bt: 16, hide: false, dt: true, aa: { yaw: "jitter", pitch: "down", desyncAngle: 50 }, wepBias: "deagle" },
+  { name: "cinder", style: "peek", aim: { priority: "head", hitchance: 41, minDmg: 30, forceBody: false }, res: 0.63, resMode: "brute", bt: 13, hide: true, dt: false, aa: { yaw: "jitter", pitch: "down", desyncAngle: 56 }, wepBias: "deagle" },
+  { name: "onyx", style: "rage", aim: { priority: "stomach", hitchance: 36, minDmg: 32, forceBody: true }, res: 0.62, resMode: "animation", bt: 15, hide: false, dt: true, aa: { yaw: "spin", pitch: "down", desyncAngle: 58 }, wepBias: "scar" },
+  { name: "dezync", style: "passive", aim: { priority: "head", hitchance: 55, minDmg: 40, forceBody: false }, res: 0.72, resMode: "onshot", bt: 6, hide: true, dt: false, aa: { yaw: "sideways", pitch: "zero", desyncAngle: 58 }, wepBias: "ssg" },
+  { name: "mirage", style: "rush", aim: { priority: "head", hitchance: 32, minDmg: 26, forceBody: false }, res: 0.55, resMode: "brute", bt: 16, hide: false, dt: true, aa: { yaw: "jitter", pitch: "down", desyncAngle: 54 }, wepBias: "r8" },
 ];
 // extra personas so a full 12v12 (23 bots) gets distinct names + varied behaviour
 const _EXTRA_NAMES = ["zephyr", "quartz", "blaze", "specter", "vortex", "raven", "cobalt", "phantom", "glitch", "static", "ember", "fang", "drift", "havoc", "pulse", "rogue"];
 const _STYLES = ["rage", "peek", "passive", "rush"], _YAWS = ["jitter", "sideways", "spin", "back"], _PITCHES = ["down", "down", "up", "zero"], _BIASES = ["deagle", "ssg", "scar", "g3", "r8", "duals"];
 for (let i = 0; i < _EXTRA_NAMES.length; i++) {
-  const head = Math.random() < 0.7;
+  const head = Math.random() < 0.7, hidesShots = Math.random() < 0.5;
   BOT_PERSONAS.push({
     name: _EXTRA_NAMES[i], style: _STYLES[i % _STYLES.length],
-    aim: { priority: head ? "head" : "stomach", hitchance: 74 + Math.floor(Math.random() * 20), forceBody: !head },
-    res: 0.68 + Math.random() * 0.26,
+    aim: { priority: head ? "head" : "stomach", hitchance: 30 + Math.floor(Math.random() * 24), minDmg: 25 + Math.floor(Math.random() * 14), forceBody: !head },
+    res: 0.48 + Math.random() * 0.24, resMode: ["animation", "brute", "onshot"][i % 3],
+    bt: 6 + Math.floor(Math.random() * (MAX_BACKTRACK_TICKS - 5)),
+    hide: hidesShots, dt: !hidesShots,          // one tick style each — they can't both apply to a shot
     aa: { yaw: _YAWS[i % _YAWS.length], pitch: _PITCHES[i % _PITCHES.length], desyncAngle: 48 + Math.floor(Math.random() * 11) },
     wepBias: _BIASES[i % _BIASES.length],
   });
@@ -151,8 +173,11 @@ export function applyPersona(a, p) {
   a.persona = p; a.name = p.name;
   const c = a.cheats;
   c.aimbot.priority = p.aim.priority; c.aimbot.hitchance = p.aim.hitchance; c.aimbot.forceBody = p.aim.forceBody;
-  c.resolver.accuracy = p.res;
+  if (p.aim.minDmg != null) c.aimbot.minDmg = p.aim.minDmg;
+  c.resolver.strength = p.res; c.resolver.mode = p.resMode || "animation";
   c.antiaim.yaw = p.aa.yaw; c.antiaim.pitch = p.aa.pitch; c.antiaim.desyncAngle = p.aa.desyncAngle;
+  c.tickbase.backtrack = Math.min(MAX_BACKTRACK_TICKS, p.bt != null ? p.bt : 12);   // bots rewind the player exactly like the player rewinds them
+  c.tickbase.hideShots = !!p.hide; c.tickbase.doubleTap = !!p.dt;
 }
 
 export function spawnAgent(team, isHuman, name) {
@@ -174,6 +199,8 @@ export function spawnAgent(team, isHuman, name) {
     aiLastPos: new THREE.Vector3(), aiStuck: 0,
     carrying: null, flashT: 0, lastDamageFrom: null, hitFlash: 0,
     landBloom: 0, onGround: true,
+    trail: [], _tick: 0, _recAcc: 0,                 // lag-compensation history (see recordTick)
+    exposeT: 0, shiftCharge: SHIFT_MAX_TICKS, shiftUsed: 0, shiftMode: null, _btMark: null,   // exposure window, tick bank, in-flight shift
   };
   agents.push(a);
   return a;
@@ -207,9 +234,24 @@ export function updateAgentVisual(a) {
   const aa = a.cheats.antiaim;
   // anti-aim DESYNC offset (the "fake" side an un-resolved shooter aims at). Computed for EVERY agent —
   // including the local player in first person — so the resolver works against the human's own anti-aim.
-  if (aa && aa.on && aa.desync && a.alive) {
-    const ang = (aa.desyncAngle || 45) * Math.PI / 180, side = a.desyncSide || 1, mag = (16 + 14 * Math.sin(ang)) * side;
-    (a._desyncOff || (a._desyncOff = new THREE.Vector3())).set(Math.cos(a.yaw) * mag, 0, -Math.sin(a.yaw) * mag);
+  // While `exposeT` is running the agent has just fired WITHOUT hiding the shot: to shoot you must be
+  // aiming at your target, so your real angles are pinned and the fake stops protecting you. That is the
+  // window every HvH player is actually reading — and what "hide shots" (tickbase) exists to close.
+  // desync OR fake duck: the sideways fake and the vertical one are separate tricks, and fake duck used
+  // to do nothing at all unless desync happened to be switched on beside it
+  if (aa && aa.on && (aa.desync || aa.fakeduck) && a.alive && !(a.exposeT > 0)) {
+    // The fake body's offset IS the desync angle, made geometry: the old formula started at 16 units
+    // even at 0°, so a desync slider set to nothing still hid you. It now scales from nothing at 0° to
+    // about a body's width at a maxed 58°, which is what the slider claims to do.
+    const ang = (aa.desyncAngle || 0) * Math.PI / 180, side = a.desyncSide || 1;
+    const mag = aa.desync ? 30 * Math.sin(ang) * side : 0;
+    const off = a._desyncOff || (a._desyncOff = new THREE.Vector3());
+    off.set(Math.cos(a.yaw) * mag, 0, -Math.sin(a.yaw) * mag);
+    // FAKE DUCK: the stance the server has is not the one on screen, so the fake is at the wrong HEIGHT
+    // as well as the wrong side — an un-resolved shot sails over a crouch or under a stand.
+    // the real stance is forced DOWN by applyFakeDuck, so the fake sits a stance-height above it
+    if (aa.fakeduck) off.y = (a.crouch ? 1 : -1) * (EYE_STAND - EYE_CROUCH);
+    if (mag === 0 && !aa.fakeduck) a._desyncOff = null;         // no angle and no fake duck is no fake at all
   } else a._desyncOff = null;
   // DESYNC GHOST: a translucent ghost cham of the LOCAL player's desynced body, shown only in THIRD
   // person (first person always hides the local body), so you can read your fake angle from behind.
@@ -226,18 +268,28 @@ export function updateAgentVisual(a) {
   a.body.g.position.set(a.pos.x, a.pos.y, a.pos.z);
   if (!a.body.glb) a.body.legs.rotation.y = a.realYaw || a.yaw;   // GLB: the Hips bone gets it after the mixer (updateBodyGLB)
   let upperYaw = a.yaw;
-  if (aa.on) {
+  const jit = (aa.jitter != null ? aa.jitter : 55) * Math.PI / 180;
+  if (aa.on && !(a.exposeT > 0)) {          // exposed by an un-hidden shot → the body snaps to the real angle
     if (aa.yaw === "back") upperYaw = a.yaw + Math.PI;
     else if (aa.yaw === "sideways") upperYaw = a.yaw + Math.PI / 2 * a.desyncSide;
     else if (aa.yaw === "spin") upperYaw = clock.t * 10;
-    else if (aa.yaw === "jitter") upperYaw = a.yaw + Math.sin(clock.t * 22 + a.pos.x) * (aa.jitter * Math.PI / 180);
+    else if (aa.yaw === "jitter") upperYaw = a.yaw + Math.sin(clock.t * 22 + a.pos.x) * jit;
+    // sway: backwards, drifting slowly across the jitter range — reads as a player who is just aiming
+    // somewhere else, so it is the one that survives a human eyeballing it
+    else if (aa.yaw === "sway") upperYaw = a.yaw + Math.PI + Math.sin(clock.t * 2.6 + a.pos.z * 0.01) * jit;
+    else if (aa.yaw === "rand") upperYaw = a.yaw + (a._randYaw || 0);   // re-rolled on the desync side cadence
   }
   const aimP = aa.on ? (aa.pitch === "down" ? 0.5 : aa.pitch === "up" ? -0.5 : 0) : 0;
-  if (a.body.glb) { const b = a.body; b.realYaw = a.realYaw || a.yaw; b.aimYaw = upperYaw; b.lean = aimP * 0.4; b.pitch = a.pitch; }   // composed onto the bones after the mixer runs
-  else { a.body.upper.rotation.y = upperYaw; a.body.upper.rotation.x = aimP * 0.4; }
-  if (a.body.glb) {   // rigged GLB: crouch/walk/run come from the animation clips (anti-aim twist above still drives the Spine/Hips bones)
+  // fake duck renders the stance you are NOT in, so a human aiming at the model is aiming at the fake
+  // (the hitboxes an aimbot reads stay on the real one — that half is the desync offset's job)
+  const shown = (aa.on && aa.fakeduck && !(a.exposeT > 0)) ? !a.crouch : a.crouch;
+  if (a.body.glb) {   // rigged GLB: stance/walk/run come from the clips; anti-aim is composed onto the bones after the mixer runs
+    const b = a.body; b.realYaw = a.realYaw || a.yaw; b.aimYaw = upperYaw; b.lean = aimP * 0.4; b.pitch = a.pitch; b.crouchShown = shown;
     const dt = Math.min(0.05, Math.max(0, clock.t - (a._visT == null ? clock.t : a._visT))); a._visT = clock.t; updateBodyGLB(a, dt);
-  } else { const sc = a.crouch ? 0.72 : 1; a.body.upper.position.y = a.crouch ? 44 - 12 : 44; a.body.legs.scale.y = sc; }   // box body: 44 = waist pivot (see body build)
+  } else {
+    a.body.upper.rotation.y = upperYaw; a.body.upper.rotation.x = aimP * 0.4;
+    const sc = shown ? 0.72 : 1; a.body.upper.position.y = shown ? 44 - 12 : 44; a.body.legs.scale.y = sc;   // 44 = waist pivot (see body build)
+  }
   if (a._wmKey !== a.cur) {
     a._wmKey = a.cur;
     if (a.body.weapon) a.body.holder.remove(a.body.weapon);
@@ -254,6 +306,50 @@ function applyGhost(a, on) {
     if (o.material.emissive) { o.material.emissive.setHex(on ? 0x33ddff : 0x000000); o.material.emissiveIntensity = on ? 0.5 : 1; }
   } });
 }
+/* ---- backtrack ghosts ----
+   Two things worth seeing. `backtrackTrail` draws the OLDEST tick still in your own history — the one
+   hitbox furthest back that an enemy cheat is allowed to rewind you into, and therefore the only one
+   worth looking at. Drawing every recorded tick just walls your own view off with a column of models.
+   `backtrackGhost` marks the record a rewound shot actually landed on, whoever fired it — so you can
+   see the bot that just backtracked YOU as well as your own rewinds.
+   Ghosts are hitbox-shaped on purpose: it's the hitbox, not the model, that gets shot. */
+const _trailPool = [], _markPool = [];
+const _GH_Y = [66.5, 53, 40, 17];                                     // head / chest / stomach / legs centres (see hitboxes())
+function ghostRig(pool, col) {
+  const g = new THREE.Group();
+  const mk = (w, h, d) => {
+    const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), new THREE.MeshBasicMaterial({ color: col, transparent: true, opacity: 0.2, depthTest: false, depthWrite: false }));
+    m.renderOrder = 991; g.add(m); return m;
+  };
+  g.userData.parts = [mk(14, 13, 14), mk(22, 14, 14), mk(20, 12, 12), mk(18, 34, 12)];
+  g.visible = false; scene.add(g); pool.push(g); return g;
+}
+function placeGhost(g, rec, opacity) {
+  const s = rec.crouch ? 0.72 : 1;
+  g.visible = true; g.position.set(rec.pos.x, rec.pos.y, rec.pos.z);
+  g.userData.parts.forEach((m, i) => { m.position.y = _GH_Y[i] * s; m.scale.y = s; m.material.opacity = opacity; });
+}
+export function updateBacktrackGhosts(dt) {
+  const human = refs.human; const v = human && human.cheats.visuals;
+  let n = 0;
+  if (v && v.backtrackTrail && human.alive && human.trail && human.trail.length > 1) {
+    const rec = human.trail[0];                                       // oldest surviving record = furthest anyone can rewind you
+    if ((human._tick | 0) - rec.tick > 0) { placeGhost(_trailPool[0] || ghostRig(_trailPool, 0x33ddff), rec, 0.3); n = 1; }
+  }
+  for (let i = n; i < _trailPool.length; i++) _trailPool[i].visible = false;
+  let m = 0;
+  for (const e of agents) {
+    const mk = e._btMark; if (!mk) continue;
+    mk.life -= dt;
+    if (mk.life <= 0) { e._btMark = null; continue; }
+    if (!v || !v.backtrackGhost) continue;
+    const g = _markPool[m] || ghostRig(_markPool, 0xff4d6d);
+    placeGhost(g, mk, 0.36 * Math.min(1, mk.life * 3));
+    m++;
+  }
+  for (let i = m; i < _markPool.length; i++) _markPool[i].visible = false;
+}
+
 export function applyChams(a, on, visible, visCol, occCol) {
   const col = on ? (visible ? (visCol || '#ff2a44') : (occCol || '#7a4cff')) : null;
   const key = on ? (visible ? 'v' : 'o') + col : 'off';

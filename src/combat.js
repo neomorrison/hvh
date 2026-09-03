@@ -6,12 +6,13 @@ import * as THREE from 'three';
 import {
   WEAPONS, INACC, INACC_K, AIRBORNE_INACC, LAND_INACC, GRAVITY, JUMP_VEL,
   EYE_STAND, EYE_CROUCH, PLAYER_RADIUS, ECON, computeDamage, TEAM, BHOP_MAX,
+  TICK, MAX_BACKTRACK_TICKS, BT_SAMPLES, EXPOSE_TIME, SHIFT_MAX_TICKS, HIDE_SHOT_COST, SHIFT_REGEN, dtTicks,
 } from './data.js';
 import { WALLS, segAABB, rayAABB, penetrate, losClear, collideMove, MAP_BOUNDS, CT_SPAWNS, T_SPAWNS } from './world.js';
 import { meshBackend } from './sourcemap.js';
 import { hitboxes, hitboxCenter, eyePos, setViewmodel } from './agents.js';
-import { agents } from './state.js';
-import { addTracer, addImpact } from './effects.js';
+import { agents, clock } from './state.js';
+import { addTracer, addImpact, addShotLine } from './effects.js';
 import { hitmarker, playHitmarker, addHitLog, damageFlash, updateHUDWeapons, playShot, playBeep, showHint, addKillFeed } from './hud.js';
 import { sfxFire, sfxReloadStart, sfxReloadEnd, sfxDraw, sfxHitmarker, sfxKnife, sfxImpact } from './sfx.js';
 import { checkRoundEnd, onHumanDeath } from './game.js';
@@ -56,13 +57,38 @@ function depenetrateAgents(a) {
   if (px === 0 && pz === 0) return false;
   a.pos.x += px; a.pos.z += pz; return true;
 }
+/* ---- FAKE DUCK ----
+   The stance half of anti-aim, and the half that actually does the work.  Spamming duck leaves the
+   SERVER holding you ducked while the client still draws you standing, so your hitboxes sit ~18 units
+   under the model everyone is aiming at.
+   That means the real crouch has to go ON — hitboxes, eye height, bloom and speed all follow the truth
+   — while updateAgentVisual() renders the opposite stance and the fake carries a vertical offset to
+   match.  Forcing the stance is the whole mechanic: without it, fake duck was a rendering trick that
+   moved no hitbox and only mattered if desync happened to be on as well.
+   It is not free — while it is held you are ducked, and a little slower still than a normal duck
+   because you are spamming the key rather than holding it. Which is exactly why it is a BIND: the
+   menu switch only arms it, `_fdActive` (the key, in main.js) decides when it is actually on. Leaving
+   it permanently engaged would pin you at a third of your speed with no way to stand up. */
+export const FAKEDUCK_SPEED = 0.8;
+export function fakeDucking(a) {
+  const aa = a.cheats && a.cheats.antiaim;
+  return !!(aa && aa.on && aa.fakeduck && a.alive && a._fdActive);
+}
+export function fakeDuckScale(a) { return fakeDucking(a) ? FAKEDUCK_SPEED : 1; }
+/* Called right after an agent's stance input is decided (the player's crouch key, a bot's AI) and
+   before anything reads it, so the forced duck holds for the rest of the frame — including the shot. */
+export function applyFakeDuck(a) { if (fakeDucking(a)) a.crouch = true; }
 export function moveAgent(a, dirXZ, dt, combat) {
   const w = WEAPONS[a.cur] || { run: 240 };
   let speed = (a.scoped && w.scopedRun) ? w.scopedRun : (w.run || 240);
-  if (a.crouch) speed *= 0.52;
+  // CS movement: ducking only slows you while your feet are on the ground. In the air the duck is
+  // just the legs tucking up — a crouch-jump keeps every unit of the speed you left the ground with,
+  // which is what makes crouch-jumping a peek technique rather than a way to stall yourself mid-air.
+  if (a.crouch && a.onGround) speed *= 0.52;
   if (a.walk) speed *= 0.52;
+  speed *= fakeDuckScale(a);
   if (combat) speed *= 0.9;
-  if (a.speedScale != null) speed *= a.speedScale;          // auto-stop
+  if (a.speedScale != null) speed *= a.speedScale;          // auto-stop (see autoStopScale — a partial slow, not a hard stop)
   if (a.bhopBoost) speed *= Math.min(BHOP_MAX, a.bhopBoost);   // bunny-hop chain speed boost (human only sets it)
   const v = dirXZ.clone().setY(0); if (v.lengthSq() > 0) v.normalize().multiplyScalar(speed);
   a.vel.x = v.x; a.vel.z = v.z;
@@ -141,33 +167,360 @@ export function moveAgent(a, dirXZ, dt, combat) {
   collideMove(a.pos, PLAYER_RADIUS, a.pos.y, a.crouch ? 46 : 72);   // then re-resolve walls
 }
 
-/* Hit chance = pure accuracy from the live bloom cone vs the target hitbox's
-   angular size at the crosshair.  No desync / resolver / anti-aim term — a shot
-   aimed at the hitbox lands iff the cone is tight enough to keep it on target. */
-export function computeAccuracy(a, aimPoint, target, group) {
-  const dist = Math.max(1, eyePos(a).distanceTo(aimPoint));
-  const cone = computeBloom(a);                              // bullet spread half-angle (radians)
-  if (cone < 1e-5) return 1;
-  const hb = hitboxes(target).find(h => h.group === group);
+/* ============================== [TICKBASE] ==============================
+   Backtrack, hide shots and the desync side-flip all live off one thing: a per-agent ring buffer of
+   recorded TICKS.  Ticks, not milliseconds — lag compensation on a real server keeps a fixed number
+   of ticks of history and a cheat rewinds a target to one of THOSE, so a millisecond slider was never
+   the right unit (and the old one wasn't wired to anything at all).                                  */
+
+/* One simulation tick of history per agent.  Called for every agent, every step. */
+export function recordTick(a, dt) {
+  const tr = a.trail || (a.trail = []);
+  if (!a.alive) { tr.length = 0; a._recAcc = 0; return; }          // you cannot rewind a corpse
+  a._recAcc = (a._recAcc || 0) + dt;
+  if (a._recAcc < TICK) return;
+  a._recAcc = 0;                                                    // drop the remainder: one record per boundary, never a burst
+  a._tick = (a._tick | 0) + 1;
+  tr.push({ tick: a._tick, pos: a.pos.clone(), crouch: !!a.crouch, eye: a.eye });
+  while (tr.length > MAX_BACKTRACK_TICKS) tr.shift();
+}
+
+/* The records `shooter` is still allowed to rewind `tgt` into, newest first, thinned to BT_SAMPLES
+   so a 16-tick window doesn't cost 16 line-of-sight traces per bot per frame. */
+function sampleTrail(tgt, ticks) {
+  const tr = tgt.trail; if (!tr || !tr.length) return [];
+  const cur = tgt._tick | 0, out = [];
+  for (let i = tr.length - 1; i >= 0; i--) { const r = tr[i], age = cur - r.tick; if (age > ticks) break; if (age > 0) out.push(r); }
+  if (out.length <= BT_SAMPLES) return out;
+  const step = (out.length - 1) / (BT_SAMPLES - 1), picked = [];
+  for (let i = 0; i < BT_SAMPLES; i++) picked.push(out[Math.round(i * step)]);
+  return picked;
+}
+export function backtrackTicks(a) {
+  const cfg = Math.min(MAX_BACKTRACK_TICKS, Math.max(0, (a.cheats.tickbase && a.cheats.tickbase.backtrack) | 0));
+  // A tickbase shift that hasn't caught up yet has already spent the lag-compensation window: the
+  // server is running your commands off-clock, so there is nothing left to rewind a target with.
+  return Math.max(0, cfg - Math.ceil(a.shiftUsed || 0));
+}
+
+/* Rewinding only changes the answer if the target actually MOVED inside the window — against someone
+   holding still every record is the same shot.  Pure arithmetic, so it's the cheap guard that keeps the
+   line-of-sight work in sampleTrail() off the hot path for the (common) stationary case. */
+function trailMoved(tgt, ticks) {
+  const tr = tgt.trail; if (!tr || !tr.length) return false;
+  const cur = tgt._tick | 0;
+  for (let i = tr.length - 1; i >= 0; i--) {
+    const r = tr[i]; if (cur - r.tick > ticks) break;
+    if (r.pos.distanceToSquared(tgt.pos) > 576) return true;      // >24u ≈ 1.5 player radii apart
+  }
+  return false;
+}
+
+/* Decide which tick exploit (if any) this shot gets.  Exactly one, ever — see the note in data.js:
+   double tap shifts the tickbase forward, hide shots shifts it backward, and a shot can't be both.
+   Double tap takes priority when both are enabled, which is how real cheat menus resolve it, and it
+   means a doubled shot is an EXPOSED shot.  Returns "dt" | "hidden" | "exposed". */
+export function onShotFired(a) {
+  const tb = a.cheats.tickbase || {}, aa = a.cheats.antiaim;
+  a._dtPending = false;
+  const dtc = dtTicks(a.cur, a.fireMode);
+  const wantsDT = !!(tb.doubleTap && dtc);
+  const wantsHide = !!(aa && aa.on && aa.desync && tb.hideShots);
+  // a shift still in flight means the tickbase is already off-clock — no second trick until it lands
+  if ((a.shiftUsed || 0) <= 0) {
+    if (wantsDT && (a.shiftCharge || 0) >= dtc) {
+      a.shiftCharge -= dtc; a.shiftUsed = dtc; a.shiftMode = "dt"; a._dtPending = true;
+      expose(a);                                    // forward-shifted: the fake angle can't cover this one
+      if (a.isHuman) addHitLog("double tap ×2", "hs");
+      return "dt";
+    }
+    if (wantsHide && (a.shiftCharge || 0) >= HIDE_SHOT_COST) {
+      a.shiftCharge -= HIDE_SHOT_COST; a.shiftUsed = HIDE_SHOT_COST; a.shiftMode = "hide"; a.hideFx = 0.25;
+      return "hidden";
+    }
+  }
+  expose(a);
+  if (a.isHuman && (wantsHide || wantsDT)) addHitLog("no shift ticks — shot exposed", "inacc");
+  return "exposed";
+}
+function expose(a) {
+  a.exposeT = EXPOSE_TIME;
+  // A shot that pins your real angles is the read every resolver actually lives on, so record when it
+  // happened. Flipping the side afterwards does NOT hide you from that read — a resolver that saw the
+  // exposure knows the flip is coming; what destroys the read is the side re-randomising later
+  // (_sideStamp), which is why a fast side cadence is worth more than the flip.
+  a._lastExpose = clock.t;
+  a.desyncSide = -(a.desyncSide || 1);          // and don't come back on the SAME side afterwards
+}
+
+/* The second bullet of a double tap.  Both rounds are processed in the SAME server frame, so there is
+   no recovery between them: the second one eats the first one's bloom and re-rolls independently.
+   `resolve` is the caller's shot resolution (aimbot solution or manual raycast). */
+export function fireDoubleTap(a, resolve) {
+  if (!a._dtPending) return false;
+  a._dtPending = false;
+  const wp = a.weapons[a.cur];
+  if (!wp || (wp.ammo || 0) <= 0) return false;
+  wp.ammo--;
+  const I = INACC[a.cur]; if (I) a.firePenalty = Math.min(I.max, (a.firePenalty || 0) + I.fire);
+  sfxFire(a);
+  resolve();
+  return true;
+}
+
+/* Per-step tickbase bookkeeping: bleed the exposure window, refill the shift bank, and keep the desync
+   side moving.  desyncSide never changed before, so every agent's fake was permanently on one side —
+   a free read for any resolver.  It now flips on its own cadence (fast under jitter/spin AA). */
+export function updateTickbase(a, dt) {
+  if (a.exposeT > 0) a.exposeT -= dt;
+  if (a.hideFx > 0) a.hideFx -= dt;
+  // the server catches up on an off-clock tickbase at real time, one tick per tick
+  if (a.shiftUsed > 0) { a.shiftUsed = Math.max(0, a.shiftUsed - dt / TICK); if (a.shiftUsed === 0) a.shiftMode = null; }
+  a.shiftCharge = Math.min(SHIFT_MAX_TICKS, (a.shiftCharge || 0) + (dt / TICK) * SHIFT_REGEN);
+  const aa = a.cheats.antiaim;
+  if (!aa || !aa.on || !aa.desync) return;
+  a._sideT = (a._sideT || 0) - dt;
+  if (a._sideT <= 0) {
+    const fast = aa.yaw === "jitter" || aa.yaw === "spin" || aa.yaw === "rand";
+    a._sideT = (fast ? 0.10 : 0.32) + Math.random() * (fast ? 0.12 : 0.45);
+    a._randYaw = (Math.random() * 2 - 1) * Math.PI;                 // the "rand" yaw mode's current fake angle
+    const side = pickDesyncSide(a);
+    // a re-roll is what actually destroys a resolver's read of your last exposure, so stamp it
+    if (side !== a.desyncSide) { a.desyncSide = side; a._sideStamp = clock.t; }
+  }
+}
+
+/* Which side the fake body stands on.
+     · freestanding LOOKS AT THE MAP: it puts the fake where the nearest threat can see it and leaves
+       the real body behind the corner, so an un-resolved shot goes into the wall you are peeking past.
+       It is the mode that makes the desync angle do work rather than just flip a coin.
+     · at_target keeps flipping, which is the old behaviour and still the right one when you are in the
+       open and there is no corner to hide the real body behind. */
+function pickDesyncSide(a) {
+  const aa = a.cheats.antiaim, coin = () => (Math.random() < 0.5 ? 1 : -1);
+  if (!aa || aa.mode !== "freestanding") return coin();
+  let threat = null, bd = Infinity;
+  for (const t of agents) { if (!t.alive || t.team === a.team || t === a) continue; const d = a.pos.distanceToSquared(t.pos); if (d < bd) { bd = d; threat = t; } }
+  if (!threat) return coin();
+  const from = eyePos(threat), mag = 30 * Math.sin((aa.desyncAngle || 0) * Math.PI / 180);
+  if (mag <= 0) return coin();
+  const chest = hitboxCenter(a, "chest"), dx = Math.cos(a.yaw) * mag, dz = -Math.sin(a.yaw) * mag;
+  const seen = s => losClear(from, new THREE.Vector3(chest.x + dx * s, chest.y, chest.z + dz * s));
+  const l = seen(1), r = seen(-1);
+  return l === r ? coin() : (l ? 1 : -1);        // put the fake on the side they can actually shoot at
+}
+
+/* ================================ [RESOLVER] ================================
+   The old resolver was one number: roll under `accuracy` and the desync is beaten, whatever the target
+   was doing.  At 0.7-0.94 that made anti-aim decoration — you were hit anyway — and made the resolver
+   the strongest cheat in the menu by a distance.  It now has to earn the read:
+
+     · An enemy who fires WITHOUT hiding the shot pins its real angles.  That is a hard read and the
+       resolver takes it: near-certain, for `memory` seconds, and only until the side re-randomises.
+     · With no read it guesses, and the guess is degraded by how much work the target's anti-aim is
+       doing (aaQuality: yaw mode, desync angle, fake duck, freestanding).
+     · `brute` mode narrows the guess across repeated shots at the SAME target — it starts worse than
+       animation and ends better, which is what brute force is.
+     · `onshot` is nearly blind between exposures and excellent right after one.
+
+   Net effect: a naked desync is still beaten most of the time, a good anti-aim that hides its shots is
+   not, and the counter-play is "make them shoot" rather than "buy the resolver". */
+export function aaQuality(a) {
+  const aa = a.cheats.antiaim;
+  if (!aa || !aa.on || !aa.desync) return 0;
+  const yawQ = { back: 0.10, sideways: 0.20, sway: 0.26, spin: 0.34, rand: 0.36, jitter: 0.40 };
+  let q = yawQ[aa.yaw] != null ? yawQ[aa.yaw] : 0.20;
+  q += 0.14 * Math.min(1, (aa.desyncAngle || 0) / 58);        // a wider desync is a wider guess
+  if (aa.fakeduck) q += 0.06;                                  // the fake is at the wrong HEIGHT too
+  if (aa.pitch && aa.pitch !== "zero") q += 0.05;               // ...and pointing somewhere you are not
+  if (aa.mode === "freestanding") q += 0.04;                   // the side is chosen, not rolled
+  return Math.min(0.55, q);
+}
+/* brute force keeps a per-target read that decays: every miss narrows the next guess, a hit locks it
+   in, and leaving the target alone for a moment loses it. */
+function bruteRead(shooter, target) {
+  const m = shooter._brute || (shooter._brute = new Map());
+  let b = m.get(target);
+  if (!b) { b = { n: 0, t: 0 }; m.set(target, b); }
+  if (clock.t - b.t > 1.6) b.n = 0;                            // stale — the desync has moved on since
+  b.t = clock.t;
+  return b;
+}
+/* WHAT A WRONG READ ACTUALLY COSTS YOU.
+   A desync is the lower body rotating about the spine — it is not the whole player teleporting
+   sideways. So the displacement between the real hitbox and the fake one depends on how far that box
+   sits from the axis it turns about: the head is out at the end of the lever and swings the full
+   width, the chest sits close to the spine, and the pelvis and legs barely move at all.
+   That is why HvH players body-aim a desyncer. The body groups' real and fake boxes still overlap,
+   and that overlap IS the safe point — a bad read on the stomach usually lands anyway, while the same
+   bad read on the head is a clean whiff. Treating every hitbox as if it moved the full desync width
+   (which is what the first cut of this did) made desync miss bodies constantly, which is not HvH. */
+export const DESYNC_SWING = { head: 1, chest: 0.35, stomach: 0.22, legs: 0.1 };
+
+export function resolveDesync(shooter, target) {
+  if (!target._desyncOff) return true;                         // no fake up — nothing to resolve
+  const R = shooter.cheats.resolver || {};
+  if (!R.on) return false;                                     // resolver off → the desync always wins
+  const strength = R.strength != null ? R.strength : 0.6;
+  const mode = R.mode || "animation";
+  const fresh = target._lastExpose != null
+    && (clock.t - target._lastExpose) < (R.memory != null ? R.memory : 0.55)
+    && target._lastExpose >= (target._sideStamp || 0);         // the side hasn't re-rolled since the read
+  const b = mode === "brute" ? bruteRead(shooter, target) : null;
+  let p;
+  if (fresh) p = strength + (1 - strength) * (mode === "onshot" ? 0.85 : 0.75);
+  else {
+    p = strength * (1 - aaQuality(target));
+    if (mode === "brute") p = Math.min(0.9, p * 0.85 + b.n * 0.09);   // starts worse, converges
+    else if (mode === "onshot") p *= 0.5;                             // blind between exposures
+  }
+  const ok = Math.random() < p;
+  if (b) b.n = ok ? Math.max(b.n, 2) : Math.min(4, b.n + 1);
+  return ok;
+}
+
+/* ============================ [SPREAD & HIT CHANCE] ============================
+   CS offsets every bullet by  r·(cos φ, sin φ)  with  r = RandomFloat(0,1) · inaccuracy  — the radius
+   scales LINEARLY with a uniform variate, so the cone is dense at the centre and thin at the rim.
+   ONE implementation of that distribution is used by everything that fires (manual shots, the aimbot,
+   and the hit-chance estimate), which is what makes the number the menu gates on an actual prediction
+   of the bullet instead of a formula that happens to live next to it. */
+const TAU = Math.PI * 2;
+const _crRight = new THREE.Vector3(), _crUp = new THREE.Vector3(), _crTmp = new THREE.Vector3();
+export function coneRay(dir, cone, r01, phi, out) {
+  const o = (out || new THREE.Vector3()).copy(dir);
+  if (!(cone > 0) || !(r01 > 0)) return o;
+  _crTmp.set(0, 1, 0); if (Math.abs(dir.y) > 0.99) _crTmp.set(1, 0, 0);
+  _crRight.crossVectors(dir, _crTmp).normalize();
+  _crUp.crossVectors(_crRight, dir).normalize();
+  const rad = cone * r01;                                     // small-angle: adding rad then renormalising IS an angle of ~rad
+  return o.addScaledVector(_crRight, Math.cos(phi) * rad).addScaledVector(_crUp, Math.sin(phi) * rad).normalize();
+}
+
+/* The estimator walks a fixed set of quantiles of that same distribution instead of rolling dice, so
+   the number doesn't shimmer frame to frame: radius (i+½)/N spans the uniform variate evenly and the
+   golden angle keeps the directions from lining up into spokes. */
+const HC_N = 32, _hcR = new Float64Array(HC_N), _hcPhi = new Float64Array(HC_N);
+for (let i = 0; i < HC_N; i++) { _hcR[i] = (i + 0.5) / HC_N; _hcPhi[i] = i * Math.PI * (3 - Math.sqrt(5)); }
+const _hcDir = new THREE.Vector3(), _hcRay = new THREE.Vector3();
+
+/* Hit chance = the fraction of the spread cone that actually lands on the hitbox being aimed at,
+   traced against the real box, times how much of that box the shooter can SEE (`exposure`).
+   Two things follow from doing it this way rather than with the old cone-vs-radius ratio:
+     · 100% is a claim, not a rounding.  It needs the whole cone inside the hitbox AND the whole
+       silhouette out of cover — so at 100 min hit chance the aimbot holds fire almost always, and
+       when it does fire the only thing left that can beat it is the resolver.
+     · the estimate is the shot.  aimbotFire() rolls one ray out of this same cone against this same
+       box, so "hit chance" is a prediction that can be checked rather than a number to trust. */
+export function computeAccuracy(a, aimPoint, body, group, exposure) {
+  const from = eyePos(a);
+  _hcDir.copy(aimPoint).sub(from); const dist = _hcDir.length();
+  if (dist < 1) return 1;
+  _hcDir.multiplyScalar(1 / dist);
+  const hb = hitboxes(body).find(h => h.group === group);
   if (!hb) return 0;
-  const r = Math.min(hb.maxX - hb.minX, hb.maxY - hb.minY, hb.maxZ - hb.minZ) / 2;   // conservative target radius
-  const targetHalfAngle = Math.atan2(r, dist);
-  return THREE.MathUtils.clamp(targetHalfAngle / cone, 0, 1);
+  const exp = exposure == null ? 1 : exposure;
+  const cone = computeBloom(a);                              // bullet spread half-angle (radians)
+  // the largest circle guaranteed to fit inside the box's silhouette from ANY angle — if the cone fits
+  // inside that, every bullet in it is on the box and there is nothing to sample
+  const rin = Math.min(hb.maxX - hb.minX, hb.maxY - hb.minY, hb.maxZ - hb.minZ) / 2;
+  if (cone <= Math.atan2(rin, dist)) return exp;
+  let hits = 0;
+  for (let i = 0; i < HC_N; i++) {
+    coneRay(_hcDir, cone, _hcR[i], _hcPhi[i], _hcRay);
+    if (rayAABB(from, _hcRay, hb) !== null) hits++;
+  }
+  // N quantiles cannot PROVE the last slice of the cone, so a sampled estimate never claims certainty
+  return Math.min(hits / HC_N, 1 - 1 / HC_N) * exp;
+}
+
+/* How much of the hitbox the shooter can actually see.  A cone tight enough to be a certainty still
+   isn't one when half of it is buried in the corner you're peeking, so the silhouette's extremes are
+   probed for line of sight and the coverage is scaled by how many came back clear.  Only meaningful on
+   a directly visible solution — a wallbang is already gated on penetration damage. */
+export function hitboxExposure(a, body, group) {
+  const hb = hitboxes(body).find(h => h.group === group); if (!hb) return 0;
+  const from = eyePos(a);
+  const cx = (hb.minX + hb.maxX) / 2, cy = (hb.minY + hb.maxY) / 2, cz = (hb.minZ + hb.maxZ) / 2;
+  const ex = (hb.maxX - hb.minX) * 0.4, ey = (hb.maxY - hb.minY) * 0.4, ez = (hb.maxZ - hb.minZ) * 0.4;
+  const dx = cx - from.x, dz = cz - from.z, dl = Math.hypot(dx, dz) || 1;
+  const sx = -dz / dl, sz = dx / dl;                         // across the line of sight, in the ground plane
+  const half = Math.abs(sx) * ex + Math.abs(sz) * ez;
+  let clear = 1;                                             // the centre is clear already — this only runs on a visible solution
+  const P = [[cx + sx * half, cy, cz + sz * half], [cx - sx * half, cy, cz - sz * half], [cx, cy + ey, cz], [cx, cy - ey, cz]];
+  for (const [px, py, pz] of P) if (losClear(from, _hcRay.set(px, py, pz))) clear++;
+  return clear / (P.length + 1);
+}
+
+/* One bullet, traced. Returns the nearest hitbox of `body` the ray crosses, or null for a clean miss. */
+export function traceHitbox(from, dir, body) {
+  let bd = Infinity, bg = null;
+  for (const hb of hitboxes(body)) { const r = rayAABB(from, dir, hb); if (r !== null && r < bd) { bd = r; bg = hb.group; } }
+  return bg ? { group: bg, dist: bd, point: from.clone().addScaledVector(dir, bd) } : null;
+}
+
+/* Evaluate ONE candidate position of a target — either the live body or one of its recorded ticks.
+   `ghost` only needs { pos, crouch }, which is all hitboxes()/hitboxCenter() read. */
+function evalShot(a, tgt, ghost, order, cb, cfg) {
+  const me = eyePos(a);
+  const directVis = visibleTo(a, ghost);
+  const none = { group: null, aimPoint: null, through: null, dmg: 0, exposure: 0 };
+  const shots = [];
+  for (const group of order) {
+    const aimPoint = hitboxCenter(ghost, group);
+    const through = directVis ? { factor: 1, surfaces: 0, blocked: false } : penetrate(me, aimPoint, a.cur);
+    if (!directVis && (!cb.autowall.on || through.blocked || through.factor <= 0)) continue;
+    const base = computeDamage(a.cur, group, me.distanceTo(aimPoint), tgt.armor > 0, tgt.helmet, tgt.armor);
+    shots.push({ group, aimPoint, through, vis: directVis, dmg: Math.round(base.damage * through.factor) });
+  }
+  if (!shots.length) return none;
+  // A wallbang keeps its hard min-damage gate — that's what min damage is FOR. A clear shot never
+  // demands more damage than the gun can physically deliver here: a pistol round against armour would
+  // otherwise leave a 30-min-damage bot standing there refusing to shoot at all.
+  const want = directVis
+    ? Math.min(cfg.minDmg, Math.max(...shots.map(x => x.dmg)))
+    : Math.max(cfg.minDmg, cb.autowall.minDmg || 1);
+  // the exposure probe costs four line-of-sight traces, so it is paid once, for the hitbox we settled on
+  for (const x of shots) if (x.dmg >= want) { x.exposure = x.vis ? hitboxExposure(a, ghost, x.group) : 1; return x; }
+  return none;
+}
+
+/* The aimbot settings in force for what this agent is holding.  A Deagle wants a different min hit
+   chance and a different hitbox than a SCAR does, so hit chance, min damage and hitbox priority each
+   read from the weapon's own override when it has one and fall through to the master otherwise —
+   which means moving the master still moves every gun you have not pinned. */
+export function aimCfg(a) {
+  const ab = a.cheats.aimbot, w = ab.weapons && ab.weapons[a.cur];
+  return {
+    hitchance: (w && w.hitchance != null) ? w.hitchance : (ab.hitchance || 0),
+    minDmg: (w && w.minDmg != null) ? w.minDmg : (ab.minDmg || 1),
+    priority: (w && w.priority != null) ? w.priority : ab.priority,
+    overridden: !!(w && (w.hitchance != null || w.minDmg != null || w.priority != null)),
+  };
 }
 
 /* Shared "can I take this shot right now?" predicate used by BOTH auto-shoot and
-   auto-stop so they agree exactly.  Picks the best target + first hitbox meeting
-   min-damage, then evaluates min-hit-chance and weapon-firable.
-   Returns { have, ok, tgt, group, aimPoint, through, dmg, hitChance } where
+   auto-stop so they agree exactly.  Picks the best target, then the best position of that target —
+   live, or rewound through its backtrack records — and the first hitbox meeting min damage.
+   Returns { have, ok, tgt, group, aimPoint, through, dmg, hitChance, btTicks, rec } where
      have = a min-damage hitbox exists to aim at,
      ok   = have AND firable (real gun, not reloading, has ammo) AND hitChance >= min. */
-export function canShoot(a) {
+function selectShot(a) {
   const cb = a.cheats;
-  const res = { have: false, ok: false, tgt: null, group: null, aimPoint: null, through: null, dmg: 0, hitChance: 0 };
+  const res = { have: false, ok: false, tgt: null, body: null, group: null, aimPoint: null, through: null, dmg: 0, exposure: 1, hitChance: 0, btTicks: 0, rec: null, safepoint: false };
   const enemies = agents.filter(t => t.alive && t.team !== a.team);
   if (!enemies.length) return res;
   const me = eyePos(a);
-  let cands = enemies.map(t => ({ t, d: me.distanceTo(t.pos), vis: visibleTo(a, t) })).filter(c => c.vis || cb.autowall.on);
+  let cands = enemies.map(t => ({ t, d: me.distanceTo(t.pos), vis: visibleTo(a, t) })).filter(c => c.vis || cb.autowall.on || backtrackTicks(a) > 0);
+  // AIMBOT FOV — the cone off your crosshair the bot is allowed to reach into. 180 is a rage bot that
+  // takes anything; narrowing it makes the aimbot legit-looking and puts target choice back on you.
+  const fov = cb.aimbot.fov != null ? cb.aimbot.fov : 180;
+  if (fov < 180 && cands.length) {
+    const look = new THREE.Vector3(0, 0, -1).applyEuler(new THREE.Euler(a.pitch, a.yaw, 0, 'YXZ'));
+    const cosHalf = Math.cos(Math.max(1, fov) * Math.PI / 360);
+    const inFov = cands.filter(c => look.dot(hitboxCenter(c.t, "chest").sub(me).normalize()) >= cosHalf);
+    if (inFov.length) cands = inFov; else return res;
+  }
   if (!cands.length) return res;
   if (cb.aimbot.target === "lowhp") cands.sort((x, y) => x.t.hp - y.t.hp);
   else if (cb.aimbot.target === "distance") cands.sort((x, y) => x.d - y.d);
@@ -176,34 +529,104 @@ export function canShoot(a) {
     cands.forEach(c => { const to = hitboxCenter(c.t, "chest").sub(me).normalize(); c.dot = fwd.dot(to); });
     cands.sort((x, y) => y.dot - x.dot);
   }
+  cands.sort((x, y) => (y.vis ? 1 : 0) - (x.vis ? 1 : 0));   // stable: a target we can actually see outranks one we can only rewind/wallbang
   const tgt = cands[0].t; res.tgt = tgt;
-  const directVis = visibleTo(a, tgt);
+  const cfg = aimCfg(a);
   let order = cb.aimbot.forceBody ? ["stomach", "chest", "legs"]
-    : (cb.aimbot.priority === "head" ? ["head", "chest", "stomach"] : ["chest", "stomach", "head"]);
+    : (cfg.priority === "head" ? ["head", "chest", "stomach"] : ["chest", "stomach", "head"]);
   // baim-if-lethal: if a body shot already KILLS, take the bigger/safer body hitbox instead of the head
   if (cb.aimbot.baimLethal && !cb.aimbot.forceBody && order[0] === "head") {
     const cd = me.distanceTo(hitboxCenter(tgt, "chest")), bodyDmg = computeDamage(a.cur, "chest", cd, tgt.armor > 0, tgt.helmet, tgt.armor).damage;
     if (bodyDmg >= tgt.hp) order = ["chest", "stomach", "head"];
   }
-  const minDmg = Math.max(cb.aimbot.minDmg || 1, !directVis ? (cb.autowall.minDmg || 1) : 1);
-  for (const group of order) {
-    const aimPoint = hitboxCenter(tgt, group);
-    const dist = me.distanceTo(aimPoint);
-    const through = penetrate(me, aimPoint, a.cur);
-    if (!directVis) { if (!cb.autowall.on || through.blocked || through.factor <= 0) continue; }
-    const base = computeDamage(a.cur, group, dist, tgt.armor > 0, tgt.helmet, tgt.armor);
-    const dmg = Math.round(base.damage * (directVis ? 1 : through.factor));
-    if (dmg >= minDmg) { res.group = group; res.aimPoint = aimPoint; res.through = directVis ? { factor: 1, surfaces: 0, blocked: false } : through; res.dmg = dmg; break; }
+  const minHc = cfg.hitchance;
+  // hit chance is measured against the BODY the solution belongs to — a rewound aim point on the live
+  // hitboxes is a shot at where nobody is, which is what the old signature quietly asked for.
+  const accOf = (x, body) => (x.group ? computeAccuracy(a, x.aimPoint, body, x.group, x.exposure) : 0);
+  let best = evalShot(a, tgt, tgt, order, cb, cfg), bestBody = tgt, bestAcc = accOf(best, tgt), bestAge = 0, bestRec = null;
+  // BACKTRACK — only when the live shot isn't already good enough. A peeker who is behind cover NOW
+  // was standing in the open a few ticks ago; the server still accepts a hit on that tick.
+  // ...but only when rewinding can actually change the answer: the live shot has to be failing AND the
+  // target has to have moved during the window. Against someone standing still every recorded tick is
+  // the same shot, and the fix for a merely-bloomed one is auto-stop, not time travel.
+  const bt = backtrackTicks(a);
+  if (bt > 0 && bestAcc * 100 < minHc && (!best.group || trailMoved(tgt, bt))) {
+    for (const rec of sampleTrail(tgt, bt)) {
+      const alt = evalShot(a, tgt, rec, order, cb, cfg);
+      if (!alt.group) continue;
+      const acc = accOf(alt, rec);
+      if (acc > bestAcc) { best = alt; bestBody = rec; bestAcc = acc; bestAge = (tgt._tick | 0) - rec.tick; bestRec = rec; }
+      if (bestAcc * 100 >= minHc) break;
+    }
   }
-  if (!res.group) return res;
-  res.have = true;
-  res.hitChance = computeAccuracy(a, res.aimPoint, tgt, res.group);
+  if (!best.group) return res;
+  res.have = true; res.group = best.group; res.aimPoint = best.aimPoint; res.through = best.through; res.dmg = best.dmg;
+  res.body = bestBody; res.exposure = best.exposure;
+  res.btTicks = bestAge; res.rec = bestRec;
+  // SAFEPOINT — the shot that does not care whether the resolver was right.  Against a desync there are
+  // two places the target might be: where the resolver says (the aim point) and where the fake is (aim
+  // point + the desync offset).  Aiming at the MIDDLE of the two leaves the same error either way, so a
+  // wrong read no longer whiffs — it just costs you half the desync's width.  That is the whole trade:
+  // a body shot that keeps landing, instead of a head shot that lands only when the resolver wins.  It
+  // pays for itself in hit chance automatically, because the gate measures this shifted point.
+  if (cb.aimbot.safepoint && tgt._desyncOff) {
+    res.aimPoint = res.aimPoint.clone().addScaledVector(tgt._desyncOff, 0.5);
+    res.safepoint = true;
+  }
+  return res;
+}
+
+/* Target/hitbox selection is the expensive half (line-of-sight traces + penetration), and it does not
+   depend on how fast we're moving — so it's memoised for one simulation step.  Hit chance and the
+   firable gate are re-derived on every call, because auto-stop's whole job is asking "what would the
+   hit chance be if I were slower" between two calls in the SAME step. */
+let _simFrame = 0;
+export function beginSimFrame() { _simFrame++; }
+export function canShoot(a) {
+  let res = a._cs;
+  if (a._csFrame !== _simFrame || !res || (res.tgt && !res.tgt.alive)) { res = selectShot(a); a._cs = res; a._csFrame = _simFrame; }
+  res.hitChance = 0; res.ok = false;
+  if (!res.have) return res;
+  res.hitChance = computeAccuracy(a, res.aimPoint, res.body, res.group, res.exposure);
   const w = WEAPONS[a.cur];
   const firable = !!w && !w.melee && a.reloadT <= 0 && (a.weapons[a.cur]?.ammo || 0) > 0;
-  // The human's auto-shoot must respect the configured Min Hit Chance (items 10/11). Bots are
-  // aimbots — they always take the shot when able; their persona skill caps the hit roll below.
-  res.ok = firable && (!a.isHuman || res.hitChance * 100 >= (cb.aimbot.hitchance || 0));
+  // EVERYONE respects min hit chance now, bots included. Bots used to ignore it and spray at whatever
+  // accuracy they happened to have, then had their hit roll CAPPED by their persona on top — which is
+  // why one player's aimbot could hold off ten of them. Same gate, same rules, both sides.
+  res.ok = firable && res.hitChance * 100 >= aimCfg(a).hitchance;
   return res;
+}
+
+/* ---- auto-stop ----
+   Not a hard stop: slow down EXACTLY as much as the configured min hit chance needs and no more, so
+   you keep whatever movement the shot can afford instead of planting like a statue every time an enemy
+   crosses the crosshair.  Returns a speed multiplier in [0,1]. */
+export function baseMoveSpeed(a, combat) {
+  const w = WEAPONS[a.cur] || { run: 240 };
+  let speed = (a.scoped && w.scopedRun) ? w.scopedRun : (w.run || 240);
+  if (a.crouch && a.onGround) speed *= 0.52;      // airborne duck costs nothing — see moveAgent
+  if (a.walk) speed *= 0.52;
+  speed *= fakeDuckScale(a);
+  if (combat) speed *= 0.9;
+  if (a.bhopBoost) speed *= Math.min(BHOP_MAX, a.bhopBoost);
+  return speed;
+}
+export function autoStopScale(a, combat) {
+  const w = WEAPONS[a.cur];
+  if (!w || w.melee) return 1;                                     // never auto-stop on the knife
+  const wp = a.weapons[a.cur];
+  if (a.reloadT > 0 || !wp || (wp.ammo || 0) <= 0) return 1;
+  const cs = canShoot(a);
+  if (!cs.have || !cs.tgt) return 1;                               // nothing worth slowing down for
+  const need = THREE.MathUtils.clamp(aimCfg(a).hitchance / 100, 0, 1);
+  if (need <= 0) return 1;
+  const vx = a.vel.x, vz = a.vel.z, full = baseMoveSpeed(a, combat);
+  const accAt = sc => { a.vel.x = full * sc; a.vel.z = 0; const acc = computeAccuracy(a, cs.aimPoint, cs.body, cs.group, cs.exposure); a.vel.x = vx; a.vel.z = vz; return acc; };
+  if (accAt(1) >= need) return 1;                                  // already accurate enough at full speed
+  if (accAt(0) < need) return 1;                                   // even planted this shot isn't makeable — don't root for nothing, keep closing
+  let lo = 0, hi = 1;
+  for (let i = 0; i < 8; i++) { const mid = (lo + hi) / 2; if (accAt(mid) >= need) lo = mid; else hi = mid; }
+  return lo;
 }
 
 export function applyHit(shooter, target, group, dist, throughWall) {
@@ -257,6 +680,7 @@ export function fireWeaponCommon(a) {
   a.lastShot = performance.now();
   const I = INACC[a.cur]; if (I) { a.firePenalty = Math.min(I.max, (a.firePenalty || 0) + I.fire); }
   if (a.cur === "r8" && a.fireMode === "fan") a.firePenalty = (a.firePenalty || 0) + 30;
+  onShotFired(a);          // pins the real angles for a moment — unless hide shots pays for it
   sfxFire(a);
 }
 
@@ -270,7 +694,8 @@ export function manualFire(a) {
   const dir = new THREE.Vector3(0, 0, -1).applyEuler(new THREE.Euler(a.pitch, a.yaw, 0, 'YXZ'));
   let spread = computeBloom(a);
   if (a.cur === "r8" && a.fireMode === "fan") spread += 0.06;
-  dir.x += (Math.random() - 0.5) * spread; dir.y += (Math.random() - 0.5) * spread; dir.z += (Math.random() - 0.5) * spread; dir.normalize();
+  coneRay(dir, spread, Math.random(), Math.random() * TAU, dir);    // same cone the hit-chance estimate samples
+
   if (meshBackend.active) { const brk = meshBackend.breakWindowsAlong(origin.x, origin.y, origin.z, dir.x, dir.y, dir.z, 9000); if (brk && brk.center) sfxImpact(brk.center, true); }   // shatter glass in the line of fire
   // nearest enemy hitbox along the ray (walls accounted for afterwards via penetration)
   let best = null, bd = 9000, bg = null;
@@ -289,17 +714,18 @@ export function manualFire(a) {
     const dist = origin.distanceTo(hitPt);
     const through = penetrate(origin, hitPt, a.cur);         // wall(s) between us and target — limited exactly like the aimbot (no more shooting through the whole map)
     if (through.factor > 0 && !through.blocked) {
-      addTracer(tracerStart, origin.clone().add(dir.clone().multiplyScalar(bd)));
+      const impact = origin.clone().add(dir.clone().multiplyScalar(bd));
+      addTracer(tracerStart, impact); shotLine(a, origin, impact, true);
       applyHit(a, best, bg, dist, through);                 // clean (factor 1) or wallbang (reduced)
       return;
     }
     const wp = origin.clone().add(dir.clone().multiplyScalar(Math.min(wallDist, bd)));   // too thick → bullet stops at wall
-    addTracer(tracerStart, wp); addImpact(wp);
+    addTracer(tracerStart, wp); addImpact(wp); shotLine(a, origin, wp, false);
     if (a.isHuman) addHitLog("blocked — wall too thick", "inacc");
     return;
   }
   const end = origin.clone().add(dir.clone().multiplyScalar(Math.min(wallDist, 9000)));
-  addTracer(tracerStart, end); addImpact(end);
+  addTracer(tracerStart, end); addImpact(end); shotLine(a, origin, end, false);
   if (a.isHuman) { let near = false; for (const t of agents) { if (t.alive && t.team !== a.team && origin.distanceTo(t.pos) < 2500 && visibleTo(a, t)) { near = true; break; } } if (near) addHitLog("missed — inaccuracy", "inacc"); }
 }
 
@@ -323,31 +749,75 @@ export function aimbotFire(a) {
   if (a.fireCd > 0) return false;
   if ((a.weapons[a.cur].ammo || 0) <= 0) { startReload(a); return false; }
   const dist = me.distanceTo(cs.aimPoint);
-  fireWeaponCommon(a);
-  // RESOLVER vs a desyncing enemy: an un-resolved shot whiffs to the FAKE (rendered) side. Resolver OFF →
-  // the desync always beats you; resolver ON resolves with probability cb.resolver.accuracy (so it can
-  // still be baited). Non-desyncing targets are unaffected (cs.tgt._desyncOff is null).
-  if (cs.tgt._desyncOff) {
-    const rp = cb.resolver.on ? (cb.resolver.accuracy != null ? cb.resolver.accuracy : 0.7) : 0;
-    if (Math.random() >= rp) {
-      const fake = cs.aimPoint.clone().add(cs.tgt._desyncOff);
-      addTracer(me.clone().add(fake.clone().sub(me).normalize().multiplyScalar(40)), fake); addImpact(fake);
-      if (a.isHuman) addHitLog("desync beat the resolver", "inacc");
-      return true;
+  const body = cs.body || cs.tgt;          // the live target, or the recorded tick backtrack rewound it to
+  // THE CONE THIS SHOT GOES OUT WITH IS THE ONE THE GATE APPROVED.  CS charges a shot's own bloom to
+  // the NEXT shot, and fireWeaponCommon() adds it below — the old code rolled the bullet AFTER that,
+  // against a cone the min-hit-chance gate had never seen.  That is why a 100% hit chance shot used to
+  // fire constantly and then miss "due to inaccuracy": the gate approved the standing cone and the
+  // bullet was rolled against the standing cone plus a full fire penalty.  At 100% now, the aimbot
+  // holds fire until the whole cone is inside the hitbox and the hitbox is out of cover — and when it
+  // does fire, the only thing left that can beat it is the resolver.
+  const approved = computeBloom(a);
+  // One bullet against the solution canShoot() picked, traced for real: same cone, same hitboxes, same
+  // world as the estimate, so the hit chance is a prediction rather than an assertion.  Called twice
+  // for a double tap — both rounds leave in the same server frame, so the second one gets the cone the
+  // first one just widened.
+  const resolve = (cone) => {
+    if (!cs.tgt.alive) { addTracer(me.clone().add(dirTo.clone().multiplyScalar(40)), cs.aimPoint); addImpact(cs.aimPoint); return; }
+    // RESOLVER vs a desyncing enemy: a lost read means aiming at the FAKE — but only as far as this
+    // particular hitbox actually swings (see DESYNC_SWING). Nothing is decided here: the round is
+    // still traced against the real body, so whether it lands falls out of whether the two boxes
+    // overlap. Head: they don't. Stomach: they do, and that overlap is the safe point.
+    // A deliberate safepoint is aimed between both answers already, so it skips the resolver entirely.
+    let aimAt = cs.aimPoint, lostRead = false;
+    if (cs.tgt._desyncOff && !cs.safepoint && !resolveDesync(a, cs.tgt)) {
+      const off = cs.tgt._desyncOff, swing = DESYNC_SWING[cs.group] != null ? DESYNC_SWING[cs.group] : 1;
+      // the sideways fake is a rotation, so it scales with the lever; a fake DUCK is a real vertical
+      // shift of the whole body, so that part is off by its full amount whichever box you picked
+      aimAt = cs.aimPoint.clone(); aimAt.x += off.x * swing; aimAt.z += off.z * swing; aimAt.y += off.y;
+      lostRead = true;
     }
-  }
-  addTracer(me.clone().add(dirTo.clone().multiplyScalar(40)), cs.aimPoint);
-  if (meshBackend.active) { const brk = meshBackend.breakWindowsAlong(me.x, me.y, me.z, dirTo.x, dirTo.y, dirTo.z, dist + 60); if (brk && brk.center) sfxImpact(brk.center, true); }   // shatter glass in the line of fire
-  // human lands at pure bloom accuracy (already past the min-hit-chance gate); a bot lands at
-  // min(accuracy, persona skill) so distance/movement still matter but skilled bots stay lethal.
-  const hitProb = a.isHuman ? cs.hitChance : Math.min(cs.hitChance, (cb.aimbot.hitchance || 100) / 100);
-  if (Math.random() < hitProb) {
-    applyHit(a, cs.tgt, cs.group, dist, cs.through);
-  } else {
-    if (a.isHuman) addHitLog("missed — inaccuracy", "inacc");
-    addImpact(cs.aimPoint.clone().add(new THREE.Vector3((Math.random() - 0.5) * 40, (Math.random() - 0.5) * 40, (Math.random() - 0.5) * 40)));
-  }
+    const dirAim = aimAt === cs.aimPoint ? dirTo : aimAt.clone().sub(me).normalize();
+    const dir = coneRay(dirAim, cone, Math.random(), Math.random() * TAU, new THREE.Vector3());
+    const hit = traceHitbox(me, dir, body);
+    // a bullet that strays into the cover we were peeking past is stopped by it, exactly as the
+    // exposure term in the hit chance said it might be
+    const blocked = !!hit && cs.through.factor >= 1 && !losClear(me, hit.point);
+    const end = (hit && !blocked) ? hit.point : me.clone().addScaledVector(dir, dist + 60);
+    addTracer(me.clone().addScaledVector(dir, 40), end);
+    if (cs.rec) cs.tgt._btMark = { pos: cs.rec.pos, crouch: cs.rec.crouch, life: 0.7 };   // the record we rewound to (drawn by the backtrack ghost visual)
+    if (meshBackend.active) { const brk = meshBackend.breakWindowsAlong(me.x, me.y, me.z, dir.x, dir.y, dir.z, dist + 60); if (brk && brk.center) sfxImpact(brk.center, true); }   // shatter glass in the line of fire
+    // Everyone lands at pure bloom accuracy. Bots used to have their roll capped by a persona "skill"
+    // number on top of the accuracy they'd already earned, which made the player's identical cheat
+    // strictly better than theirs — the 1-v-10 problem. Same maths for every agent now; a persona's
+    // edge is its min hit chance, min damage, backtrack depth and resolver, not a secret handicap.
+    if (hit && !blocked) {
+      // the hitbox the BULLET found, not the one we aimed at — a round that strays off the head onto
+      // the chest still does chest damage, which is the honest outcome of a cone that missed its mark
+      applyHit(a, cs.tgt, hit.group, hit.dist, cs.through);
+      if (a.isHuman && cs.btTicks > 0) addHitLog(`backtracked ${cs.btTicks} tick${cs.btTicks > 1 ? 's' : ''}`, "hs");
+    } else {
+      if (a.isHuman) addHitLog(blocked ? "clipped cover" : lostRead ? "desync beat the resolver" : "missed — inaccuracy", "inacc");
+      addImpact(end);
+    }
+    shotLine(a, me, end, !!(hit && !blocked));
+  };
+  fireWeaponCommon(a);          // arms _dtPending if this shot won a forward shift
+  resolve(approved);
+  fireDoubleTap(a, () => resolve(computeBloom(a)));
   return true;
+}
+
+/* Local shot lines: the beam the LOCAL player's own rounds leave behind, so you can see where a shot
+   actually went after the tracer is long gone.  World-space and fixed at the muzzle it left from, so it
+   stays put while you keep moving; `shotLineTime` in the config decides how long it takes to fade. */
+function shotLine(a, from, to, hit) {
+  if (!a.isHuman) return;
+  const v = a.cheats.visuals || {};
+  if (!v.shotLines) return;
+  const fwd = new THREE.Vector3(-Math.sin(a.yaw), 0, -Math.cos(a.yaw));
+  const start = from.clone().addScaledVector(new THREE.Vector3(-fwd.z, 0, fwd.x), 7).addScaledVector(fwd, 14); start.y -= 5;   // off the eye, roughly at the muzzle, so it is visible in first person
+  addShotLine(start, to, v.shotLineTime != null ? v.shotLineTime : 1.5, hit ? (v.shotLineHit || '#ff4d6d') : (v.shotLineMiss || '#4dc3ff'));
 }
 
 /* melee: slash (stab=false) / stab (stab=true), with backstab bonus */

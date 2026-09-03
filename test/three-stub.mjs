@@ -30,6 +30,7 @@ export class Vector3 {
     const ax = this.x, ay = this.y, az = this.z;
     this.x = ay * v.z - az * v.y; this.y = az * v.x - ax * v.z; this.z = ax * v.y - ay * v.x; return this;
   }
+  crossVectors(a, b) { this.x = a.y * b.z - a.z * b.y; this.y = a.z * b.x - a.x * b.z; this.z = a.x * b.y - a.y * b.x; return this; }
   applyEuler(e) {
     // order 'YXZ' (the only order the game uses), matching three.js makeRotationFromEuler
     const x = e.x, y = e.y, z = e.z;

@@ -6,17 +6,18 @@ import { scene, camera, renderer } from './core.js';
 import { WEAPONS, TEAM, INACC, LAND_RECOVER, JUMP_VEL, BHOP_GAIN, BHOP_MAX, ECON, computeDamage } from './data.js';
 import { agents, refs, GAME, vm, clock, keys, input } from './state.js';
 import { WALLS, NODES, EDGES, segAABB, losClear, penetrate } from './world.js';
-import { updateEffects, nadeProjectiles } from './effects.js';
-import { setViewmodel, updateAgentVisual, hitboxCenter, eyePos } from './agents.js';
-import { manualFire, aimbotFire, fireWeaponCommon, meleeAttack, moveAgent, computeBloom, startReload, finishReload, switchTo, selectBest, visibleTo, canShoot } from './combat.js';
+import { updateEffects, nadeProjectiles, shotLines } from './effects.js';
+import { setViewmodel, updateAgentVisual, updateBacktrackGhosts, hitboxCenter, eyePos } from './agents.js';
+import { manualFire, aimbotFire, fireWeaponCommon, fireDoubleTap, meleeAttack, moveAgent, computeBloom, startReload, finishReload, switchTo, selectBest, visibleTo, autoStopScale, baseMoveSpeed, recordTick, updateTickbase, beginSimFrame, applyFakeDuck } from './combat.js';
 import { botThink } from './ai.js';
+import { verifyCheats } from './selftest.js';
 import {
   openBuy, closeBuy, beginBuyToLive, awardWin, endRoundAdvance, startRound, buildTeams,
   updateHostages, updateNades, updateAreas, tryRescueInteract, equipGrenade, throwNade, liveHostages,
 } from './game.js';
 import {
-  updateAllHUD, updateTopHUD, updatePlayerHUD, updateBotBars, updateHUDWeapons, drawRadar,
-  updateESP, updateReloadRing, updateBloomRing, updateScopeOverlay, updateR8Hammer,
+  updateAllHUD, updateTopHUD, updatePlayerHUD, updateTeamStatus, updateHUDWeapons, drawRadar,
+  updateESP, updateReloadRing, updateBloomRing, updateHitChanceHUD, updateScopeOverlay, updateR8Hammer,
   renderScoreboard, centerMessage, showHint, showHintOnce, formatTime, buildCrosshair, anyPanelOpen, audio, setBeepMute, playBeep,
 } from './hud.js';
 import { toggleCheatMenu, buildCheatMenu, loadConfig, saveConfig, syncCheatUI } from './cheats.js';
@@ -92,6 +93,13 @@ addEventListener('keydown', e => {
   if (e.code === "Digit2") { human.equippedNade = null; if (human.slotSecondary) switchTo(human, human.slotSecondary); } // 2 = pistol/secondary
   if (e.code === "Digit3") { human.equippedNade = null; switchTo(human, 'knife'); }                                    // 3 = knife
   if (e.code === "Digit4" || e.code === "KeyG") { equipGrenade(); }                                                    // 4 = grenade
+  {
+    const aaK = human.cheats.antiaim || {};
+    if (aaK.fakeduck && aaK.fakeduckMode === "toggle" && e.code === (aaK.fakeduckKey || "KeyX") && !e.repeat) {
+      human._fdToggle = !human._fdToggle;
+      showHint("Fake duck " + (human._fdToggle ? "ON — you are ducked" : "OFF"));
+    }
+  }
   if (e.code === "KeyR") { startReload(human); }
   if (e.code === "KeyE") { tryRescueInteract(human); }
   if (e.code === "KeyV") {
@@ -147,6 +155,11 @@ function humanMove(dt) {
   const human = refs.human;
   // crouch is C, NOT Ctrl: Ctrl+W (duck + forward) closes the browser tab and a web page can't block it
   human.crouch = !!keys["KeyC"];
+  // FAKE DUCK BIND — held by default. It forces a real crouch, so it is deliberately something you
+  // press for a peek rather than a switch you leave on and then wonder why you are walking so slowly.
+  const aaH = human.cheats.antiaim || {};
+  human._fdActive = (aaH.fakeduckMode === "toggle") ? !!human._fdToggle : !!keys[aaH.fakeduckKey || "KeyX"];
+  applyFakeDuck(human);            // the stance it forces is real; the model keeps standing
   human.walk = !!keys["ShiftLeft"];
   let f = 0, s = 0; if (keys["KeyW"]) f++; if (keys["KeyS"]) f--; if (keys["KeyA"]) s--; if (keys["KeyD"]) s++;
   const fwd = new THREE.Vector3(-Math.sin(human.yaw), 0, -Math.cos(human.yaw));
@@ -162,16 +175,14 @@ function humanMove(dt) {
   human.realYaw = human.yaw;
   human.speedScale = 1;
   const c = human.cheats;
-  // auto-stop: fully stop the instant a shot WOULD qualify if we were stopped — same
-  // min-damage + min-hit-chance + firable predicate as auto-shoot (canShoot). We judge it
-  // with velocity zeroed so the moving-bloom doesn't keep it from ever engaging while running.
+  // AUTO-STOP: shed exactly enough speed to reach the configured min hit chance — not a dead stop.
+  // autoStopScale() solves for the largest speed whose bloom still makes the shot canShoot() picked,
+  // so a close-range shot barely slows you and only a long one plants you. Knife is excluded inside.
   if (c.aimbot.on && c.aimbot.autoStop && human.onGround) {
     const w = WEAPONS[human.cur];
     // don't keep planting between shots on a slow non-auto (SSG/scout bolt cycle) — only stop when actually able to fire now
     const fireReady = human.fireCd <= 0 || (w && w.auto);
-    const vx = human.vel.x, vz = human.vel.z; human.vel.x = 0; human.vel.z = 0;
-    if (fireReady && canShoot(human).ok) human.speedScale = 0;
-    human.vel.x = vx; human.vel.z = vz;
+    if (fireReady) human.speedScale = autoStopScale(human, false);
   }
   moveAgent(human, dir, dt, false);
 }
@@ -205,7 +216,7 @@ function humanShoot(dt) {
     const wp8 = human.weapons.r8; if (!wp8) return; const c8 = human.cheats; const COCK = WEAPONS.r8.cockTime || 0.25;
     if (rmb) {
       human.r8Charge = 0;
-      if (human.fireCd <= 0) { if (wp8.ammo <= 0) { startReload(human); return; } human.fireMode = "fan"; sfxRevolverCock(); fireWeaponCommon(human); manualFire(human); updateHUDWeapons(); }   // fan: cock + fire each shot (spams the cock)
+      if (human.fireCd <= 0) { if (wp8.ammo <= 0) { startReload(human); return; } human.fireMode = "fan"; sfxRevolverCock(); fireWeaponCommon(human); manualFire(human); updateHUDWeapons(); }   // fan: cock + fire each shot (spams the cock). No fireDoubleTap — the R8 is excluded from double tap (see NO_DOUBLE_TAP)
       return;
     }
     if (c8.aimbot.on && c8.aimbot.autoRevolver) {
@@ -237,7 +248,7 @@ function humanShoot(dt) {
     if (md) {
       human.r8Charge = Math.min(1, (human.r8Charge || 0) + dt / COCK);
       if (human.r8Charge >= 0.95 && !human.r8Cocked) { human.r8Cocked = true; sfxRevolverCock(); }
-      if (human.r8Charge >= 1 && human.fireCd <= 0) { if (wp8.ammo <= 0) { startReload(human); human.r8Charge = 0; human.r8Cocked = false; return; } human.fireMode = "primary"; fireWeaponCommon(human); manualFire(human); human.r8Charge = 0; human.r8Cocked = false; updateHUDWeapons(); }
+      if (human.r8Charge >= 1 && human.fireCd <= 0) { if (wp8.ammo <= 0) { startReload(human); human.r8Charge = 0; human.r8Cocked = false; return; } human.fireMode = "primary"; fireWeaponCommon(human); manualFire(human); human.r8Charge = 0; human.r8Cocked = false; updateHUDWeapons(); }   // the revolver never doubles — its hammer cock is not a next-attack check to shift past
     } else { human.r8Charge = Math.max(0, (human.r8Charge || 0) - dt / COCK * 2); human.r8Cocked = false; }
     return;
   }
@@ -254,6 +265,7 @@ function humanShoot(dt) {
     if (wp.ammo <= 0) { startReload(human); return; }
     human.fireMode = r8fan ? "fan" : "primary";
     fireWeaponCommon(human); manualFire(human);
+    fireDoubleTap(human, () => manualFire(human));      // double tap: the second round of the same server frame
     if (glockBurst) {
       human.burstQ = human.burstQ > 0 ? human.burstQ - 1 : 2;     // 3-round burst (this shot + 2 queued)
       human.fireCd = human.burstQ > 0 ? 0.07 : 0.4;               // rapid within the burst, then a gap before the next
@@ -296,6 +308,7 @@ function loop(now) {
   render();
 }
 export function step(dt, extra) {
+  beginSimFrame();                       // invalidates the per-step aimbot target memo (see canShoot)
   if (GAME.phase === "buy") { GAME.freeze -= dt; if (GAME.freeze <= 0) beginBuyToLive(); }
   else if (GAME.phase === "live") { GAME.timer -= dt; if (GAME.timer <= 0) awardWin(TEAM.T, "time"); }
   else if (GAME.phase === "end") { GAME.timer -= dt; if (GAME.timer <= 0) endRoundAdvance(); }
@@ -308,6 +321,7 @@ export function step(dt, extra) {
     if (a.firePenalty > 0) { const I = INACC[a.cur]; const rec = I ? (a.crouch ? I.recov * 0.7 : I.recov) : 0.35; a.firePenalty *= Math.pow(0.5, dt / rec); if (a.firePenalty < 0.05) a.firePenalty = 0; }
     if (a.hurtBloom > 0) { a.hurtBloom *= Math.pow(0.5, dt / 0.18); if (a.hurtBloom < 0.05) a.hurtBloom = 0; }
     if (a.landBloom > 0) { a.landBloom = Math.max(0, a.landBloom - LAND_RECOVER * dt); }   // landing inaccuracy bleeds off
+    updateTickbase(a, dt);               // shot-exposure window, hide-shots bank, desync side-flip
     if (a.alive && a.reloadT <= 0 && a.cur && a.weapons[a.cur] && a.weapons[a.cur].ammo <= 0 && a.weapons[a.cur].reserve > 0 && !(a.isHuman && a.equippedNade)) startReload(a);
   }
 
@@ -324,11 +338,13 @@ export function step(dt, extra) {
     if (GAME.phase === "buy") a.body.g.position.copy(a.pos);
     else if (canAct) botThink(a, dt);
   }
+  for (const a of agents) recordTick(a, dt);     // lag-compensation history — everyone's backtrack reads this
   updateHostages(dt); updateNades(dt); updateAreas(dt); updateEffects(dt);
   for (const a of agents) updateAgentVisual(a);
-  updateESP(); updateReloadRing(); updateBloomRing(); updateScopeOverlay(); updateR8Hammer(); updateSpecBanner();
+  updateBacktrackGhosts(dt);
+  updateESP(); updateReloadRing(); updateBloomRing(); updateHitChanceHUD(); updateScopeOverlay(); updateR8Hammer(); updateSpecBanner();
   updateCamera();
-  updateTopHUD(); updatePlayerHUD(); updateBotBars(); updateHUDWeapons();
+  updateTopHUD(); updatePlayerHUD(); updateTeamStatus(); updateHUDWeapons();
   $("#roundTimer").textContent = formatTime(GAME.phase === "buy" ? GAME.freeze : GAME.timer);
   $("#phaseBanner").textContent = GAME.phase === "buy" ? "BUY" : (GAME.phase === "end" ? "ROUND OVER" : "");
   if (human.alive && human.team === TEAM.CT && !human.carrying) { for (const h of liveHostages()) { if (human.pos.distanceTo(h.pos) < 70) { showHintOnce("Press E to grab hostage"); break; } } }
@@ -473,9 +489,11 @@ preloadModels().then(m => { if (m.ready) console.log('[models] loaded:', ['playe
 window.HVH = {
   get GAME() { return GAME; }, get agents() { return agents; }, get human() { return refs.human; }, MODELS,
   WEAPONS, ECON, computeDamage, WALLS, NODES, EDGES, segAABB, losClear, penetrate, camera, scene, renderer, meshBackend,
-  deploy, deploySource, editorDebug,
+  get shotLines() { return shotLines; },
+  deploy, deploySource, editorDebug, verifyCheats,
   fastForward(secs) { const dt = 1 / 60; let t = 0; while (t < secs) { step(dt); t += dt; } return { phase: GAME.phase, score: [GAME.scoreCT, GAME.scoreT] }; },
   computeBloom(a) { return computeBloom(a || refs.human); },
+  baseMoveSpeed(a, combat) { return baseMoveSpeed(a || refs.human, combat); },
   testGrenade() { refs.human.nades = { he: 1, flash: 1 }; equipGrenade(); const eq = refs.human.equippedNade; const before = nadeProjectiles.length; const ok = throwNade(refs.human, eq); return { equipped: eq, threw: ok, projectilesBefore: before, projectilesAfter: nadeProjectiles.length, remaining: refs.human.nades[eq] }; },
   testPenetration() {
     const saved = WALLS.splice(0, WALLS.length);

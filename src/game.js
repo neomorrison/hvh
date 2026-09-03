@@ -3,7 +3,7 @@
    sellback for misclicks) and grenades.                                      */
 import * as THREE from 'three';
 import { scene, renderer } from './core.js';
-import { TEAM, ECON, WEAPONS, NADES, ARMOR, EYE_STAND, GRAVITY } from './data.js';
+import { TEAM, ECON, WEAPONS, NADES, ARMOR, EYE_STAND, GRAVITY, SHIFT_MAX_TICKS } from './data.js';
 import { CT_SPAWNS, T_SPAWNS, HOSTAGE_SPAWNS, RESCUE_ZONES, losClear } from './world.js';
 import { spawnAgent, applyPersona, BOT_PERSONAS, recolorAgent, eyePos, hitboxCenter, setViewmodel } from './agents.js';
 import { giveWeapon, selectBest, switchTo, killAgent } from './combat.js';
@@ -60,6 +60,11 @@ export function resetAgentForRound(a, spawn) {
   a.crouch = false; a.scoped = false; a.reloadT = 0; a.fireCd = 0; a.carrying = null; a.flashT = 0; a.hitFlash = 0;
   a.yaw = (spawn.yaw != null) ? spawn.yaw : (a.team === TEAM.CT ? -Math.PI / 2 : Math.PI / 2); a.pitch = 0; a.realYaw = a.yaw;
   a.equippedNade = null; a.firePenalty = 0; a.hurtBloom = 0; a.landBloom = 0; a.onGround = true;
+  a.trail = []; a._tick = 0; a._recAcc = 0; a._btMark = null;              // nobody may rewind into last round
+  a.exposeT = 0; a.hideFx = 0; a.shiftCharge = SHIFT_MAX_TICKS; a.shiftUsed = 0; a.shiftMode = null; a._sideT = 0; a._dtPending = false;
+  a._lastExpose = null; a._sideStamp = 0; a._randYaw = 0; if (a._brute) a._brute.clear();   // nobody carries last round's resolver read into this one
+  a._fdActive = false; a._fdToggle = false;                                // and nobody respawns still fake ducking
+  a.desyncSide = Math.random() < 0.5 ? 1 : -1;                             // and don't start every round on the same fake side
   a.aiPath = []; a.aiTimer = 0; a.aiStuck = 0; a.aiLastSeen = null; a.aiLastSeenT = 0; a.aiNoContact = 0;   // clear stale AI state so no bot chases a dead position
   a.boughtThisBuy = {};                                    // reset same-buy sellback tracking
   a.body.g.visible = true;
@@ -154,6 +159,20 @@ export function updateHostages(dt) {
 }
 
 /* ============================== buy menu ============================== */
+/* CS2 armour rules, which the old flat "$1000 sets armor to 100" never modelled:
+     · full kit (100 armour + helmet)  → not for sale at all
+     · helmet kept, vest shot down     → you are only re-buying the VEST, so it costs $650, not $1000
+     · vest full, no helmet            → the helmet alone, $350
+     · nothing                         → the full $1000 kit
+   Returns null when there is nothing left to buy.  Shared by the player's buy menu and botBuy(). */
+export function armorBuy(a, key) {
+  if (key === "kevlar") return a.armor >= 100 ? null : { cost: ARMOR.kevlar.cost, armor: 100, helmet: a.helmet, desc: "100 armor" };
+  if (a.armor >= 100 && a.helmet) return null;
+  if (a.helmet) return { cost: ARMOR.kevlar.cost, armor: 100, helmet: true, desc: "refill vest — helmet kept" };
+  if (a.armor >= 100) return { cost: ARMOR.helmet.cost, armor: 100, helmet: true, desc: "helmet only — vest already full" };
+  return { cost: ARMOR.kevhelm.cost, armor: 100, helmet: true, desc: "100 armor + helmet" };
+}
+
 export function buildBuyMenu() {
   const human = refs.human;
   const grid = $("#buyGrid"); grid.innerHTML = "";
@@ -167,7 +186,7 @@ export function buildBuyMenu() {
     const el = document.createElement("div"); el.className = "buyitem";
     let nm, cost, desc;
     if (it.type === "w") { const w = WEAPONS[it.k]; nm = w.name; cost = w.cost; desc = `${w.dmg} dmg · ${w.penPct}% AP · ${w.rpm} RPM`; }
-    else if (it.type === "armor") { nm = ARMOR[it.k].name; cost = ARMOR[it.k].cost; desc = it.k === "kevhelm" ? "100 armor + helmet" : "100 armor"; }
+    else if (it.type === "armor") { const deal = armorBuy(human, it.k); nm = ARMOR[it.k].name; cost = deal ? deal.cost : 0; desc = deal ? deal.desc : "already equipped"; }
     else { const n = NADES[it.k]; nm = n.name; cost = n.cost; desc = n.kind; }
     el.innerHTML = `<div class="bn"><span><span class="key">${keymap[i] || ""}</span>${nm}</span><span class="bp">$${cost}</span></div><div class="bd">${desc}</div>`;
     el.onclick = () => buyItem(it);
@@ -183,7 +202,16 @@ export function refreshBuyAfford() {
   $("#buyMoney").textContent = "$" + human.money;
   [...$("#buyGrid").children].forEach(el => {
     const it = el._it; if (!it) return;
-    const cost = it.type === "w" ? WEAPONS[it.k].cost : it.type === "armor" ? ARMOR[it.k].cost : NADES[it.k].cost;
+    if (it.type === "armor") {                       // price/label change as you take armour damage — see armorBuy()
+      const deal = armorBuy(human, it.k);
+      const bp = el.querySelector(".bp"), bd = el.querySelector(".bd");
+      if (bp) bp.textContent = deal ? "$" + deal.cost : "—";
+      if (bd) bd.textContent = deal ? deal.desc : "already equipped";
+      el.classList.toggle("full", !deal);
+      el.classList.toggle("cant", !deal || human.money < deal.cost);
+      return;
+    }
+    const cost = it.type === "w" ? WEAPONS[it.k].cost : NADES[it.k].cost;
     let afford;
     if (it.type === "w") { const slotName = WEAPONS[it.k].slot === 2 ? 'primary' : 'secondary'; const prev = human.boughtThisBuy[slotName]; afford = human.money + (prev ? prev.cost : 0) >= cost; el.classList.toggle("owned", !!(prev && prev.key === it.k)); }
     else afford = human.money >= cost;
@@ -223,11 +251,18 @@ export function buyItem(it) {
     refreshBuyAfford(); updateAllHUD(); playBeep(700, 0.05); sfxEquip();
     return;
   }
+  if (it.type === "armor") {
+    const deal = armorBuy(human, it.k);
+    if (!deal) { showHint(human.helmet ? "Already have kevlar + helmet" : "Armor is already full"); return; }
+    if (human.money < deal.cost) { showHint("Not enough money"); return; }
+    human.armor = deal.armor; human.helmet = deal.helmet; human.money -= deal.cost;
+    refreshBuyAfford(); updateAllHUD(); playBeep(700, 0.05); sfxEquip();
+    return;
+  }
   if (it.type === "nade" && human.nades[it.k] > 0) { showHint("Already have a " + NADES[it.k].name); return; }   // one of each grenade
-  const cost = it.type === "armor" ? ARMOR[it.k].cost : NADES[it.k].cost;
+  const cost = NADES[it.k].cost;
   if (human.money < cost) { showHint("Not enough money"); return; }
-  if (it.type === "armor") { human.armor = 100; if (it.k === "kevhelm") human.helmet = true; }
-  else { human.nades[it.k] = 1; human.curNade = it.k; }
+  human.nades[it.k] = 1; human.curNade = it.k;
   human.money -= cost; refreshBuyAfford(); updateAllHUD(); playBeep(700, 0.05); sfxEquip();
 }
 export function openBuy() { if (!canBuyNow()) { showHint("Buy time is over"); return; } buildBuyMenu(); $("#buyPanel").classList.add("show"); document.exitPointerLock(); }

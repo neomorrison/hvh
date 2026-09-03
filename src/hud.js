@@ -4,11 +4,11 @@
    tiny WebAudio SFX.  Also the small message/marker helpers everyone uses.  */
 import * as THREE from 'three';
 import { camera } from './core.js';
-import { WEAPONS, NADES, TEAM } from './data.js';
+import { WEAPONS, NADES, TEAM, SHIFT_MAX_TICKS, HIDE_SHOT_COST, dtTicks } from './data.js';
 import { WALLS, RESCUE_ZONES, MAP_BOUNDS, losClear } from './world.js';
 import { hitboxCenter, eyePos } from './agents.js';
 import { agents, refs, GAME, vm } from './state.js';
-import { computeBloom, visibleTo } from './combat.js';
+import { computeBloom, canShoot, visibleTo, aimCfg } from './combat.js';
 import { liveHostages } from './game.js';
 
 const $ = s => document.querySelector(s);
@@ -37,7 +37,7 @@ export function addKillFeedText(t) { const div = document.createElement("div"); 
 const hlEl = $("#hitlog");
 export function addHitLog(text, kind) { const d = document.createElement("div"); d.className = "hl " + (kind || "hit"); d.textContent = text; hlEl.appendChild(d); setTimeout(() => d.remove(), 2200); while (hlEl.children.length > 7) hlEl.firstChild.remove(); }
 
-export function updateAllHUD() { updateTopHUD(); updatePlayerHUD(); updateBotBars(); updateHUDWeapons(); }
+export function updateAllHUD() { updateTopHUD(); updatePlayerHUD(); updateTeamStatus(); updateHUDWeapons(); }
 export function updateTopHUD() {
   $("#scoreCT").textContent = GAME.scoreCT; $("#scoreT").textContent = GAME.scoreT;
   $("#roundInfo").textContent = `Round ${GAME.round} · ${GAME.half === 1 ? "First" : "Second"} Half · You: ${GAME.humanTeam}`;
@@ -45,8 +45,29 @@ export function updateTopHUD() {
 export function updatePlayerHUD() {
   const human = refs.human; if (!human) return;
   $("#hpStat").querySelector(".val").textContent = Math.max(0, Math.ceil(human.hp));
-  $("#armorStat").querySelector(".val").textContent = Math.max(0, Math.ceil(human.armor)) + "";
+  $("#armorStat").querySelector(".val").textContent = Math.max(0, Math.ceil(human.armor)) + (human.helmet ? " ⛑" : "");
   $("#money").textContent = "$" + human.money;
+  // Tickbase readout: the shared command budget plus which exploit is actually armed right now. The
+  // badges light one at a time on purpose — that IS the rule (double tap outranks hide shots, and a
+  // shift still in flight suppresses backtrack), and it's easier to read than to explain.
+  const tb = human.cheats.tickbase || {}, el = $("#tickStat");
+  const aa = human.cheats.antiaim || {}, fd = !!(aa.on && aa.fakeduck);
+  if (!tb.hideShots && !tb.doubleTap && !(tb.backtrack > 0) && !fd) { el.style.display = "none"; return; }
+  const bank = human.shiftCharge || 0, inFlight = (human.shiftUsed || 0) > 0;
+  const dtc = dtTicks(human.cur, human.fireMode);
+  const dtReady = !!tb.doubleTap && dtc > 0 && bank >= dtc && !inFlight;
+  const hsReady = !!tb.hideShots && bank >= HIDE_SHOT_COST && !inFlight && !dtReady;
+  const btReady = tb.backtrack > 0 && !inFlight;
+  const badge = (on, ready, txt, tip) => on ? `<span class="tk-b${ready ? " on" : ""}" title="${tip}">${txt}</span>` : "";
+  el.style.display = "block";
+  el.innerHTML = `<span class="tk-l">TICKBASE</span>` +
+    `<span class="tk-bar"><span style="width:${Math.round(100 * Math.min(1, bank / SHIFT_MAX_TICKS))}%"></span></span>` +
+    `<span class="tk-n">${Math.floor(bank)}/${SHIFT_MAX_TICKS}</span>` +
+    badge(!!tb.doubleTap, dtReady, "DT", dtc ? `double tap — ${dtc} ticks` : (human.cur === "r8" ? "the R8's hammer cock is not a next-attack check — no cheat doubles the revolver" : `${WEAPONS[human.cur] ? WEAPONS[human.cur].name : "this weapon"} can't be double tapped`)) +
+    badge(!!tb.hideShots, hsReady, "HS", dtReady ? "outranked by double tap this shot" : `hide shots — ${HIDE_SHOT_COST} ticks`) +
+    badge(tb.backtrack > 0, btReady, "BT", inFlight ? "suppressed — tickbase shift in flight" : `${tb.backtrack} ticks`) +
+    // in first person you cannot see your own body, so the one cue that you are really ducked is here
+    badge(fd, human.crouch && !(human.exposeT > 0), "FD", "fake duck — you are really ducked, the model is standing");
 }
 export function updateHUDWeapons() {
   const human = refs.human; if (!human || !human.cur) return;
@@ -64,13 +85,17 @@ export function updateHUDWeapons() {
   $("#wepList").innerHTML = list.map(k => `<span class="${(!human.equippedNade && k === human.cur) ? 'sel' : ''}">${WEAPONS[k].name}</span>`).join("  ·  ")
     + (heldNades.length ? `  ·  <span class="${human.equippedNade ? 'sel' : ''}">💣${heldNades.map(k => NADES[k].name).join(',')}</span>` : "");
 }
-export function updateBotBars() {
-  const colCT = $("#colCT"), colT = $("#colT"); colCT.innerHTML = ""; colT.innerHTML = "";
-  for (const a of agents) {
-    const chip = document.createElement("div"); chip.className = "pchip" + (a.alive ? "" : " dead");
-    const side = a.team === TEAM.CT ? "ct" : "t";
-    chip.innerHTML = `<span class="dot ${side}"></span><span class="nm ${a.isHuman ? 'you' : ''}">${a.name}</span><span class="hpbar"><span class="hpfill" style="width:${Math.max(0, a.hp)}%"></span></span>`;
-    (a.team === TEAM.CT ? colCT : colT).appendChild(chip);
+/* Team status in the top bar: side badge + one pip per player + the alive count, the way CS shows it.
+   The old HUD listed all 24 players with health bars down both sides of the screen, which was fine at
+   5v5 and a wall of text at 12v12 — the full per-player table lives on the Tab scoreboard. */
+export function updateTeamStatus() {
+  for (const [side, cls, pipsEl, aliveEl] of [[TEAM.CT, "ct", $("#pipsCT"), $("#aliveCT")], [TEAM.T, "t", $("#pipsT"), $("#aliveT")]]) {
+    const list = agents.filter(a => a.team === side);
+    aliveEl.textContent = list.reduce((n, a) => n + (a.alive ? 1 : 0), 0);
+    const key = list.map(a => (a.alive ? "1" : "0") + (a.isHuman ? "y" : "")).join("");
+    if (pipsEl._key === key) continue;                       // only rebuild the pips when someone actually dies
+    pipsEl._key = key;
+    pipsEl.innerHTML = list.map(a => `<span class="tb-pip ${a.alive ? "on " + cls : ""}${a.isHuman ? " me" : ""}"></span>`).join("");
   }
 }
 
@@ -99,7 +124,8 @@ export function renderScoreboard() {
   $("#sbTitle").textContent = `${mapName} · MR12 · CT ${GAME.scoreCT} : ${GAME.scoreT} T · Round ${GAME.round}`;
   for (const [side, el] of [[TEAM.CT, $("#sbCT")], [TEAM.T, $("#sbT")]]) {
     const list = agents.filter(a => a.team === side).sort((a, b) => b.kills - a.kills);
-    el.innerHTML = `<div class="hd"><span></span><span>${side}</span><span>K</span><span>D</span><span>$</span><span>Weapon</span></div>` +
+    const alive = list.reduce((n, a) => n + (a.alive ? 1 : 0), 0);
+    el.innerHTML = `<div class="hd"><span></span><span>${side} · ${alive}/${list.length} alive</span><span>K</span><span>D</span><span>$</span><span>Weapon</span></div>` +
       list.map(a => `<div class="sbrow ${side === TEAM.CT ? 'ct' : 't'} ${a.alive ? '' : 'dead'} ${a.isHuman ? 'me' : ''}">
         <span>${a.alive ? '●' : '✕'}</span><span class="${a.isHuman ? 'you' : ''}">${a.name}</span><span>${a.kills}</span><span>${a.deaths}</span><span>$${a.money}</span><span>${WEAPONS[a.cur]?.name || '-'}</span></div>`).join("");
   }
@@ -162,6 +188,25 @@ export function updateBloomRing() {
   let dia = THREE.MathUtils.clamp(bloom * focal * 1.3, 6, 340);
   ring.style.width = dia + "px"; ring.style.height = dia + "px";
   setCrosshairGap(THREE.MathUtils.clamp(dia * 0.22, 2, 80));
+}
+/* Live hit-chance readout under the crosshair (Visuals → Debug).  The same number the aimbot's gate
+   uses, on the same solution it picked — so "why did it not shoot" and "why did that miss" are things
+   you can watch happen rather than infer. */
+export function updateHitChanceHUD() {
+  const human = refs.human, el = $("#hcInd");
+  const v = human && human.cheats.visuals;
+  if (!human || !human.alive || !v || !v.hitchance || anyPanelOpen()) { el.style.display = "none"; return; }
+  const cs = canShoot(human);
+  if (!cs.have || !cs.tgt) { el.style.display = "none"; return; }
+  const cfg = aimCfg(human);
+  const pct = Math.round(cs.hitChance * 100), need = cfg.hitchance;
+  el.style.display = "block";
+  el.className = pct >= need ? "ok" : "";
+  el.innerHTML = `<b>${pct}%</b> ${cs.group} · ${Math.round(cs.dmg)} dmg` +
+    (cs.exposure < 0.999 ? ` · ${Math.round(cs.exposure * 100)}% exposed` : "") +
+    (cs.btTicks ? ` · bt ${cs.btTicks}tk` : "") +
+    (pct >= need ? "" : ` · need ${need}%`) +
+    (cfg.overridden ? ` · ${WEAPONS[human.cur] ? WEAPONS[human.cur].name : human.cur} cfg` : "");
 }
 export function updateScopeOverlay() {
   const human = refs.human; const ov = document.getElementById('scopeOverlay');

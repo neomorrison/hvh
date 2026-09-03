@@ -71,7 +71,8 @@ const _qy = new THREE.Quaternion(), _qx = new THREE.Quaternion(), _qw = new THRE
 export function updateBodyGLB(a, dt) {
   const b = a.body; if (!b || !b.glb) return;
   const sp = Math.hypot(a.vel.x, a.vel.z), moving = sp > 30;
-  const want = a.crouch ? (moving ? 'crouch_walk' : 'crouch_idle') : (moving ? (sp > 150 ? 'run' : 'walk') : 'idle');
+  const crouch = b.crouchShown != null ? b.crouchShown : a.crouch;   // fake duck shows the stance you are NOT in
+  const want = crouch ? (moving ? 'crouch_walk' : 'crouch_idle') : (moving ? (sp > 150 ? 'run' : 'walk') : 'idle');
   if (want !== b.cur && b.actions[want]) {
     const from = b.actions[b.cur], to = b.actions[want];
     to.reset().setEffectiveWeight(1); to.timeScale = 1;
