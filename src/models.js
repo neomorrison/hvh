@@ -52,6 +52,11 @@ export function makeBodyGLB(team, isHuman) {
   // GLTFLoader sanitises node names (PropertyBinding: strips [ ] . : /) so "Hand.R" arrives as "HandR"
   const bone = n => g.getObjectByName(n) || g.getObjectByName(n.replace(/[\[\]\.:\/]/g, '')) || null;
   const hips = bone('Hips'), spine = bone('Spine'), head = bone('Head'), handR = bone('Hand.R') || bone('Hand.L');
+  // Anti-aim pivots: identity Groups slipped in above Hips and Spine. The twist is SET on these every frame
+  // (never composed onto the bones — the mixer only rewrites a bone when its animated value changes, so an
+  // additive twist would accumulate). Extra identity parents leave bone matrixWorld and skinning unchanged.
+  const pivot = (bn, name) => { if (!bn || !bn.parent) return null; const p = bn.parent, piv = new THREE.Group(); piv.name = name; p.add(piv); piv.add(bn); return piv; };
+  const hipsPiv = pivot(hips, 'HipsTwist'), spinePiv = pivot(spine, 'SpineTwist');
   // weapon holder hangs off the right hand so the gun follows the arm through animations
   const holder = new THREE.Group(); if (handR) { handR.add(holder); holder.position.set(0, 3, 0); } else g.add(holder);   // 3u along the hand bone = palm; orientation is re-solved every frame (updateBodyGLB)
   const mixer = new THREE.AnimationMixer(g), actions = {};
@@ -60,7 +65,7 @@ export function makeBodyGLB(team, isHuman) {
   // fake "chest"/"belly" handles so recolorAgent() keeps working: they just point at the cloth material owner
   const clothHolder = { material: mats.cloth || mats[Object.keys(mats)[0]] || new THREE.MeshStandardMaterial() };
   return { g, upper: spine || g, legs: hips || g, head: head || clothHolder, chest: clothHolder, belly: clothHolder, holder, weapon: null,
-           glb: true, mixer, actions, cur: 'idle', bones: { hips, spine, head }, hand: handR,
+           glb: true, mixer, actions, cur: 'idle', bones: { hips, spine, head }, hand: handR, hipsPiv, spinePiv,
            realYaw: 0, aimYaw: 0, lean: 0, pitch: 0 };   // filled by updateAgentVisual each frame, applied after the mixer below
 }
 /* Drive a GLB body: blend to the right clip from movement state, then compose the anti-aim on top of the
@@ -80,9 +85,9 @@ export function updateBodyGLB(a, dt) {
   }
   const act = b.actions[b.cur]; if (act && (b.cur === 'walk' || b.cur === 'run' || b.cur === 'crouch_walk')) act.timeScale = THREE.MathUtils.clamp(sp / (b.cur === 'run' ? 220 : 120), 0.4, 1.8);
   b.mixer.update(dt);
-  const { hips, spine } = b.bones, dy = b.aimYaw - b.realYaw;
-  if (hips) hips.quaternion.premultiply(_qy.setFromAxisAngle(_Y, b.realYaw));
-  if (spine) spine.quaternion.premultiply(_qx.setFromAxisAngle(_X, b.lean)).premultiply(_qy.setFromAxisAngle(_Y, dy));
+  const dy = b.aimYaw - b.realYaw;   // absolute each frame on the pivots (see makeBodyGLB): legs = real yaw, torso = fake angle + lean
+  if (b.hipsPiv) b.hipsPiv.quaternion.setFromAxisAngle(_Y, b.realYaw);
+  if (b.spinePiv) b.spinePiv.quaternion.copy(_qy.setFromAxisAngle(_Y, dy)).multiply(_qx.setFromAxisAngle(_X, b.lean));
   if (b.hand) {   // holder local = handWorld⁻¹ · desiredWorld  (body root carries no rotation, only position)
     b.hand.updateWorldMatrix(true, false); b.hand.getWorldQuaternion(_qw);
     b.holder.quaternion.copy(_qw).invert().multiply(_qy.setFromAxisAngle(_Y, b.aimYaw)).multiply(_qx.setFromAxisAngle(_X, -b.pitch));
