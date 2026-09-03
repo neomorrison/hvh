@@ -89,31 +89,49 @@ BONES = [  # name, head(x,y,z), tail, parent   (Blender Z-up, x right, -y forwar
     ('Foot.R',     (5.5, 0, 4),   (5.5, -8, 1),  'Shin.R'),
 ]
 
+# Body = a vertex skeleton with per-joint radii (rx = half width, ry = half depth) run through the Skin
+# modifier (one continuous quad-topology mesh, no caps to pinch) and two subdivision levels -> smooth
+# mannequin that deforms cleanly under auto weights and any anti-aim twist.  Positions match BONES.
+SKIN_V = [  # name, (x, y, z), (rx, ry)
+    ('pelvis', (0, 0, 39), (9.0, 5.8)), ('belly', (0, 0, 46), (8.6, 5.8)), ('chest', (0, 0, 55), (12.0, 7.0)), ('shoulders', (0, 0, 61), (14.0, 6.5)),
+    ('neck', (0, 0, 65.5), (3.4, 3.4)), ('chin', (0, 0, 68), (4.8, 5.2)), ('head', (0, 0, 72.5), (6.3, 6.7)), ('crown', (0, 0, 77.5), (4.2, 4.6)),
+]
+for _sx, _t in ((-1, 'L'), (1, 'R')):
+    SKIN_V += [('shoulder.' + _t, (_sx * 12.5, 0, 61), (3.6, 3.6)), ('elbow.' + _t, (_sx * 15, 0, 49), (2.9, 2.9))]
+    SKIN_V += [('wrist.' + _t, (-15, -2, 38), (2.4, 2.4)), ('hand.' + _t, (-15, -4, 32), (2.8, 2.2))] if _t == 'L' else [('wrist.' + _t, (15, -3, 41), (2.4, 2.4)), ('hand.' + _t, (13, -9, 40), (2.8, 2.2))]
+    SKIN_V += [('hip.' + _t, (_sx * 5.5, 0, 38), (4.6, 4.6)), ('knee.' + _t, (_sx * 5.5, 0, 20), (3.7, 3.7)), ('ankle.' + _t, (_sx * 5.5, 0, 4), (3.0, 3.0)), ('toe.' + _t, (_sx * 5.5, -8, 1.6), (3.0, 1.6))]
+SKIN_E = [('pelvis', 'belly'), ('belly', 'chest'), ('chest', 'shoulders'), ('shoulders', 'neck'), ('neck', 'chin'), ('chin', 'head'), ('head', 'crown')]
+for _t in ('L', 'R'):
+    SKIN_E += [('shoulders', 'shoulder.' + _t), ('shoulder.' + _t, 'elbow.' + _t), ('elbow.' + _t, 'wrist.' + _t), ('wrist.' + _t, 'hand.' + _t),
+               ('pelvis', 'hip.' + _t), ('hip.' + _t, 'knee.' + _t), ('knee.' + _t, 'ankle.' + _t), ('ankle.' + _t, 'toe.' + _t)]
+
+def _region_material(c):
+    """material slot for a face centre: 0 skin, 1 cloth, 2 pants, 3 vest, 4 boot"""
+    x, y, z = c
+    if z >= 74.5: return 3                        # helmet
+    if 68 <= z < 74.5 and y < -3: return 5        # visor: dark front panel so the facing direction reads
+    if z >= 64: return 0                          # head / neck
+    if abs(x) > 10.5:                             # arms
+        return 1 if z > 45 else 0                 # sleeve / forearm+hand
+    if z >= 41: return 3 if 49 <= z <= 62 and abs(x) < 9 else 1   # chest plate / shirt
+    return 4 if z < 5.5 else 2                    # boots / trousers
+
 def build_player():
     skin, cloth, pants, vest, boot = mat('skin', (0.85, 0.65, 0.5)), mat('cloth', (0.18, 0.31, 0.53)), mat('pants', (0.13, 0.19, 0.28)), mat('vest', (0.12, 0.16, 0.24), 0.6, 0.15), mat('boot', (0.08, 0.09, 0.11))
-    parts = []
-    # torso built as one tapered, subdivided body so the waist twist reads as a lean, not a cut
-    parts.append(box('belly', (20, 12, 12), (0, 0, 43), cloth, bevel=2.5))
-    parts.append(box('chest', (24, 13, 16), (0, 0, 55), cloth, bevel=3))
-    parts.append(box('vest',  (25, 14, 17), (0, 0.3, 55), vest, bevel=3))
-    parts.append(cyl('neck', 3.5, 5, (0, 0, 65), skin))
-    parts.append(sphere('head', 6.4, (0, 0, 72.5), skin, 20)); parts[-1].scale = (1, 1, 1.1)
-    parts.append(box('helmet', (13.5, 13.5, 6), (0, 0, 76.5), vest, bevel=2))
-    parts.append(box('visor', (9, 2, 4), (0, -6.4, 72), mat('visor', (0.07, 0.08, 0.09), 0.4), bevel=0.5))
-    for sx, tag in ((-1, 'L'), (1, 'R')):
-        parts.append(cyl('shoulder' + tag, 3.8, 7, (sx * 14, 0, 58), cloth))
-        parts.append(cyl('uarm' + tag, 3, 14, (sx * 15, 0, 49), cloth))
-        parts.append(cyl('farm' + tag, 2.6, 12, (sx * 15, -2, 38), skin))
-        parts.append(sphere('hand' + tag, 2.8, (sx * 14.5, -4, 31.5), skin, 10))
-        parts.append(cyl('thigh' + tag, 4.2, 20, (sx * 5.5, 0, 30), pants))
-        parts.append(cyl('shin' + tag, 3.6, 18, (sx * 5.5, 0.5, 12), pants))
-        parts.append(box('boot' + tag, (8, 13, 5), (sx * 5.5, -2, 2.5), boot, bevel=1))
-    body = join(parts, 'Player')
-    for m in (skin, cloth, pants, vest, boot): pass
-    # smooth: shade smooth + a light subdivision so silhouettes are round under any anti-aim twist
-    bpy.context.view_layer.objects.active = body; body.select_set(True)
-    bpy.ops.object.shade_smooth(); sub = body.modifiers.new('sub', 'SUBSURF'); sub.levels = 1; sub.render_levels = 1
-    bpy.ops.object.modifier_apply(modifier='sub')
+    idx = {n: i for i, (n, _, _) in enumerate(SKIN_V)}
+    me = bpy.data.meshes.new('Player'); me.from_pydata([v[1] for v in SKIN_V], [(idx[a], idx[b]) for a, b in SKIN_E], [])
+    body = bpy.data.objects.new('Player', me); bpy.context.collection.objects.link(body)
+    bpy.ops.object.select_all(action='DESELECT'); body.select_set(True); bpy.context.view_layer.objects.active = body
+    bpy.ops.object.modifier_add(type='SKIN'); sk = body.modifiers[-1]; sk.use_smooth_shade = True
+    for i, (n, _, r) in enumerate(SKIN_V):
+        sv = me.skin_vertices[0].data[i]; sv.radius = r; sv.use_root = (n == 'pelvis')
+    bpy.ops.object.modifier_apply(modifier=sk.name)
+    # materials go on the coarse skin mesh so region borders follow its rings (subdividing after keeps them clean)
+    for m in (skin, cloth, pants, vest, boot, mat('visor', (0.07, 0.08, 0.09), 0.35)): me.materials.append(m)
+    for p in me.polygons: p.material_index = _region_material(p.center)
+    bpy.ops.object.modifier_add(type='SUBSURF'); sub = body.modifiers[-1]; sub.levels = 2; sub.render_levels = 2
+    bpy.ops.object.modifier_apply(modifier=sub.name)
+    bpy.ops.object.shade_smooth()
     # armature
     bpy.ops.object.armature_add(enter_editmode=True, location=(0, 0, 0)); arm = bpy.context.active_object; arm.name = 'Armature'
     eb = arm.data.edit_bones; eb.remove(eb[0]); made = {}
@@ -133,10 +151,18 @@ def _key(pb, frame, rot=None):
 def _clip(arm, name, frames, pose):
     """pose(f) -> {bone: (rx,ry,rz deg)} ; cyclic action of `frames` length stored as an NLA strip."""
     act = bpy.data.actions.new(name); arm.animation_data_create(); arm.animation_data.action = act
+    names = [b[0] for b in BONES]; feet = [arm.pose.bones[n] for n in ('Foot.L', 'Foot.R')]; hips = arm.pose.bones['Hips']
     for f in range(0, frames + 1):
-        for bn, r in pose(f / frames).items():
-            _key(arm.pose.bones[bn], f, r)
-    for fc in act.fcurves:
+        p = pose(f / frames)
+        for bn in names:                     # key EVERY bone so earlier clips on the NLA stack can't bleed through
+            _key(arm.pose.bones[bn], f, p.get(bn, (0, 0, 0)))
+        # ground the feet: drop the hips so the lowest foot point sits on z=0 (crouch folds the legs, walk/run swing them)
+        bpy.context.scene.frame_set(f)
+        minz = min((arm.matrix_world @ q).z for pb in feet for q in (pb.head, pb.tail))
+        hips.location.y -= minz; hips.keyframe_insert('location', frame=f)     # Hips bone is vertical: local Y = world up
+    # Blender 4.4+/5.x layered actions: fcurves live in layer -> strip -> channelbag (keyframe_insert created them)
+    fcurves = [fc for L in act.layers for S in L.strips for cb in S.channelbags for fc in cb.fcurves] if act.is_action_layered else list(act.fcurves)
+    for fc in fcurves:
         for kp in fc.keyframe_points: kp.interpolation = 'BEZIER'
         m = fc.modifiers.new('CYCLES')
     act.use_frame_range = True; act.frame_start, act.frame_end = 0, frames
@@ -156,10 +182,11 @@ def build_player_anims(arm):
         s = S(t * P)
         return {'Thigh.L': (55 * s, 0, 0), 'Thigh.R': (-55 * s, 0, 0), 'Shin.L': (max(0, -70 * s), 0, 0), 'Shin.R': (max(0, 70 * s), 0, 0),
                 'UpperArm.L': (-40 * s, 0, -10), 'UpperArm.R': (30, 0, 12), 'Forearm.R': (65, 0, 0), 'Spine': (0, 0, 6 * s), 'Chest': (12, 0, 0), 'Hips': (0, 0, -4 * s), 'Head': (-8, 0, -4 * s)}
-    def cidle(t): return {'Thigh.L': (-70, 0, 0), 'Thigh.R': (-70, 0, 0), 'Shin.L': (95, 0, 0), 'Shin.R': (95, 0, 0), 'Spine': (18, 0, 0), 'Chest': (10 + 2 * S(t * P), 0, 0), 'Head': (-20, 0, 0), 'UpperArm.R': (30, 0, 10), 'Forearm.R': (60, 0, 0), 'UpperArm.L': (0, 0, -8)}
+    # deep squat: thigh ~horizontal, shin leaning 35° -> hips ~19u up, head ~56u (matches the 0.72 crouch hitbox scale)
+    def cidle(t): return {'Thigh.L': (-85, 0, 0), 'Thigh.R': (-85, 0, 0), 'Shin.L': (120, 0, 0), 'Shin.R': (120, 0, 0), 'Spine': (18, 0, 0), 'Chest': (10 + 2 * S(t * P), 0, 0), 'Head': (-20, 0, 0), 'UpperArm.R': (30, 0, 10), 'Forearm.R': (60, 0, 0), 'UpperArm.L': (0, 0, -8)}
     def cwalk(t):
         s = S(t * P); base = cidle(t)
-        base.update({'Thigh.L': (-70 + 18 * s, 0, 0), 'Thigh.R': (-70 - 18 * s, 0, 0), 'Shin.L': (95 - 10 * s, 0, 0), 'Shin.R': (95 + 10 * s, 0, 0)}); return base
+        base.update({'Thigh.L': (-85 + 18 * s, 0, 0), 'Thigh.R': (-85 - 18 * s, 0, 0), 'Shin.L': (120 - 12 * s, 0, 0), 'Shin.R': (120 + 12 * s, 0, 0)}); return base
     _clip(arm, 'idle', 48, idle); _clip(arm, 'walk', 24, walk); _clip(arm, 'run', 16, run); _clip(arm, 'crouch_idle', 48, cidle); _clip(arm, 'crouch_walk', 28, cwalk)
 
 # ----------------------------------------------------------------------------- weapons
@@ -167,7 +194,7 @@ def build_player_anims(arm):
 def build_weapons():
     black, dark, metal, wood, tan = mat('black', (0.14, 0.15, 0.18), 0.5, 0.45), mat('dark', (0.08, 0.09, 0.11), 0.6, 0.3), mat('metal', (0.6, 0.64, 0.68), 0.3, 0.8), mat('wood', (0.42, 0.28, 0.14), 0.7), mat('tan', (0.71, 0.61, 0.43), 0.75)
     roots = []
-    def B(n, s, l, m, bev=0.4): return box(n, s, (l[0], -l[2], l[1]), m, bevel=bev)          # (x, y_up, z_fwd) -> blender
+    def B(n, s, l, m, bev=0.4): return box(n, (s[0], s[2], s[1]), (l[0], -l[2], l[1]), m, bevel=bev)   # (x, y_up, z_fwd) -> blender, size AND position
     def C(n, r, L, l, m):        return cyl(n, r, L, (l[0], -l[2], l[1]), m, axis='Y')
     def finish(name, parts):
         r = join(parts, name); r.location = (0, 0, 0); roots.append(r); return r

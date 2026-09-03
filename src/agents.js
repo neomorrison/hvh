@@ -224,7 +224,7 @@ export function updateAgentVisual(a) {
     else applyChams(a, false);
   }
   a.body.g.position.set(a.pos.x, a.pos.y, a.pos.z);
-  a.body.legs.rotation.y = a.realYaw || a.yaw;
+  if (!a.body.glb) a.body.legs.rotation.y = a.realYaw || a.yaw;   // GLB: the Hips bone gets it after the mixer (updateBodyGLB)
   let upperYaw = a.yaw;
   if (aa.on) {
     if (aa.yaw === "back") upperYaw = a.yaw + Math.PI;
@@ -232,9 +232,9 @@ export function updateAgentVisual(a) {
     else if (aa.yaw === "spin") upperYaw = clock.t * 10;
     else if (aa.yaw === "jitter") upperYaw = a.yaw + Math.sin(clock.t * 22 + a.pos.x) * (aa.jitter * Math.PI / 180);
   }
-  a.body.upper.rotation.y = upperYaw;
   const aimP = aa.on ? (aa.pitch === "down" ? 0.5 : aa.pitch === "up" ? -0.5 : 0) : 0;
-  a.body.upper.rotation.x = aimP * 0.4;
+  if (a.body.glb) { const b = a.body; b.realYaw = a.realYaw || a.yaw; b.aimYaw = upperYaw; b.lean = aimP * 0.4; b.pitch = a.pitch; }   // composed onto the bones after the mixer runs
+  else { a.body.upper.rotation.y = upperYaw; a.body.upper.rotation.x = aimP * 0.4; }
   if (a.body.glb) {   // rigged GLB: crouch/walk/run come from the animation clips (anti-aim twist above still drives the Spine/Hips bones)
     const dt = Math.min(0.05, Math.max(0, clock.t - (a._visT == null ? clock.t : a._visT))); a._visT = clock.t; updateBodyGLB(a, dt);
   } else { const sc = a.crouch ? 0.72 : 1; a.body.upper.position.y = a.crouch ? 44 - 12 : 44; a.body.legs.scale.y = sc; }   // box body: 44 = waist pivot (see body build)
@@ -243,7 +243,7 @@ export function updateAgentVisual(a) {
     if (a.body.weapon) a.body.holder.remove(a.body.weapon);
     a.body.weapon = buildWeaponModel(a.cur); a.body.weapon.scale.setScalar(1.0); a.body.holder.add(a.body.weapon);
   }
-  a.body.holder.rotation.x = -a.pitch;
+  if (!a.body.glb) a.body.holder.rotation.x = -a.pitch;   // GLB: holder is re-aimed from the hand bone in updateBodyGLB
 }
 function chamsVisible(human, a) { const e = eyePos(human); return losClear(e, hitboxCenter(a, 'chest')) || losClear(e, hitboxCenter(a, 'head')); }
 // local desync ghost: translucent see-through cyan model so you can read your own fake angle
