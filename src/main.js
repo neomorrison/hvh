@@ -25,6 +25,7 @@ import { loadSourceMap } from './sourcemap_load.js';
 import { meshBackend } from './sourcemap.js';
 import { setListener, sfxScope, unlockAudio, sfxRevolverCock, setSfxMute } from './sfx.js';
 import { toggleEditor, isEditorOpen, editorUpdate, editorRender, editorKey, loadPatches, editorDebug } from './editor.js';
+import { preloadModels, MODELS } from './models.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
 const $ = s => document.querySelector(s);
@@ -468,8 +469,9 @@ function boot() {
 }
 
 /* debug/test surface */
+preloadModels().then(m => { if (m.ready) console.log('[models] loaded:', ['player', 'weapons', 'nades'].filter(k => m[k]).join(', ')); }).catch(() => {});   // GLB player/weapon/grenade models (fallbacks stay if absent)
 window.HVH = {
-  get GAME() { return GAME; }, get agents() { return agents; }, get human() { return refs.human; },
+  get GAME() { return GAME; }, get agents() { return agents; }, get human() { return refs.human; }, MODELS,
   WEAPONS, ECON, computeDamage, WALLS, NODES, EDGES, segAABB, losClear, penetrate, camera, scene, renderer, meshBackend,
   deploy, deploySource, editorDebug,
   fastForward(secs) { const dt = 1 / 60; let t = 0; while (t < secs) { step(dt); t += dt; } return { phase: GAME.phase, score: [GAME.scoreCT, GAME.scoreT] }; },

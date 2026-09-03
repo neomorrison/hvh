@@ -7,8 +7,10 @@ import { scene, camera } from './core.js';
 import { TEAM, WEAPONS, ECON, EYE_STAND } from './data.js';
 import { agents, refs, vm, clock, GAME } from './state.js';
 import { losClear } from './world.js';
+import { makeBodyGLB, updateBodyGLB, buildWeaponModelGLB } from './models.js';
 
 export function makeBody(team, isHuman) {
+  const glb = makeBodyGLB(team, isHuman); if (glb) return glb;   // rigged Blender model when models/player.glb is loaded
   const g = new THREE.Group();
   const skinC = isHuman ? 0xf2c79a : (team === TEAM.CT ? 0xe7c6a0 : 0xddb892);
   const cloth = team === TEAM.CT ? 0x2b4f86 : 0x6e5a2c;
@@ -57,6 +59,7 @@ export function makeBody(team, isHuman) {
 
 /* ---- weapon models (held + viewmodel); barrel points +Z ---- */
 export function buildWeaponModel(key) {
+  const glb = buildWeaponModelGLB(key); if (glb) return glb;   // Blender weapon model when models/weapons.glb is loaded
   const g = new THREE.Group();
   const black = new THREE.MeshStandardMaterial({ color: 0x23272e, roughness: .5, metalness: .45 });
   const dark = new THREE.MeshStandardMaterial({ color: 0x15181d, roughness: .6, metalness: .3 });
@@ -232,7 +235,9 @@ export function updateAgentVisual(a) {
   a.body.upper.rotation.y = upperYaw;
   const aimP = aa.on ? (aa.pitch === "down" ? 0.5 : aa.pitch === "up" ? -0.5 : 0) : 0;
   a.body.upper.rotation.x = aimP * 0.4;
-  const sc = a.crouch ? 0.72 : 1; a.body.upper.position.y = a.crouch ? 44 - 12 : 44; a.body.legs.scale.y = sc;   // 44 = waist pivot (see body build)
+  if (a.body.glb) {   // rigged GLB: crouch/walk/run come from the animation clips (anti-aim twist above still drives the Spine/Hips bones)
+    const dt = Math.min(0.05, Math.max(0, clock.t - (a._visT == null ? clock.t : a._visT))); a._visT = clock.t; updateBodyGLB(a, dt);
+  } else { const sc = a.crouch ? 0.72 : 1; a.body.upper.position.y = a.crouch ? 44 - 12 : 44; a.body.legs.scale.y = sc; }   // box body: 44 = waist pivot (see body build)
   if (a._wmKey !== a.cur) {
     a._wmKey = a.cur;
     if (a.body.weapon) a.body.holder.remove(a.body.weapon);

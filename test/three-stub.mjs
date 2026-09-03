@@ -76,6 +76,14 @@ class Object3D {
 }
 export class Group extends Object3D {}
 export class Scene extends Object3D { constructor() { super(); this.background = null; this.fog = null; } }
+// skinned-mesh / animation shims: the GLB model loader is browser-only; node only needs these to resolve
+export class Bone extends Object3D {}
+export class Skeleton { constructor(bones = []) { this.bones = bones; } }
+export class SkinnedMesh extends Object3D { constructor(geometry, material) { super(); this.geometry = geometry; this.material = material; this.isMesh = true; this.isSkinnedMesh = true; } bind(s) { this.skeleton = s; } }
+export class AnimationClip { constructor(name = '', duration = 0, tracks = []) { this.name = name; this.duration = duration; this.tracks = tracks; } static findByName(clips, name) { return (clips || []).find(c => c.name === name) || null; } }
+export class AnimationMixer { constructor(root) { this.root = root; } clipAction(clip) { const a = { play() { return a; }, stop() { return a; }, reset() { return a; }, fadeIn() { return a; }, fadeOut() { return a; }, crossFadeTo() { return a; }, setLoop() { return a; }, setEffectiveWeight() { return a; }, setEffectiveTimeScale() { return a; }, weight: 1, timeScale: 1, enabled: true, paused: false, clip }; return a; } update() {} stopAllAction() {} }
+Object3D.prototype.clone = function (recursive = true) { const c = new this.constructor(); c.name = this.name; c.position.copy(this.position); c.visible = this.visible; c.userData = { ...this.userData }; if (recursive) for (const ch of this.children) c.add(ch.clone(true)); return c; };
+Object3D.prototype.getObjectByName = function (name) { if (this.name === name) return this; for (const ch of this.children) { const f = ch.getObjectByName && ch.getObjectByName(name); if (f) return f; } return undefined; };
 
 class Mat { constructor(o = {}) { Object.assign(this, o); this.color = new Color(o.color || 0); this.emissive = new Color(o.emissive || 0); this.emissiveIntensity = o.emissiveIntensity ?? 1; } dispose() {} clone() { return new Mat(this); } }
 export class MeshStandardMaterial extends Mat {}
