@@ -12,6 +12,7 @@ import { agents, refs, GAME, FREEZE_TIME, ROUND_TIME, END_TIME, BUY_TIME } from 
 import { meshBackend } from './sourcemap.js';
 import { clearEffects, addExplosion, smokes, fires, nadeProjectiles } from './effects.js';
 import { sfxNade, sfxEquip } from './sfx.js';
+import { nadeMeshGLB } from './models.js';
 import { centerMessage, showHint, updateAllHUD, updateHUDWeapons, addKillFeedText, damageFlash, doFlash, playBeep } from './hud.js';
 
 const $ = s => document.querySelector(s);
@@ -271,6 +272,7 @@ export function showBuyAuto() { showHint("BUY PHASE — press B to open buy menu
 /* ============================== grenades ============================== */
 // distinct thrown model per grenade type
 export function nadeMesh(kind) {
+  const glb = nadeMeshGLB(kind); if (glb) return glb;   // Blender grenade model when models/nades.glb is loaded
   const mat = c => new THREE.MeshStandardMaterial({ color: c, roughness: .7, metalness: .2 });
   let g, m;
   if (kind === "he") { g = new THREE.SphereGeometry(5, 10, 8); g.scale(1, 1.25, 1); m = mat(0x3f5a2f); }            // dark-green pineapple

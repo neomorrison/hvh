@@ -7,8 +7,10 @@ import { scene, camera } from './core.js';
 import { TEAM, WEAPONS, ECON, EYE_STAND, EYE_CROUCH, MAX_BACKTRACK_TICKS, SHIFT_MAX_TICKS } from './data.js';
 import { agents, refs, vm, clock, GAME } from './state.js';
 import { losClear } from './world.js';
+import { makeBodyGLB, updateBodyGLB, buildWeaponModelGLB } from './models.js';
 
 export function makeBody(team, isHuman) {
+  const glb = makeBodyGLB(team, isHuman); if (glb) return glb;   // rigged Blender model when models/player.glb is loaded
   const g = new THREE.Group();
   const skinC = isHuman ? 0xf2c79a : (team === TEAM.CT ? 0xe7c6a0 : 0xddb892);
   const cloth = team === TEAM.CT ? 0x2b4f86 : 0x6e5a2c;
@@ -57,6 +59,7 @@ export function makeBody(team, isHuman) {
 
 /* ---- weapon models (held + viewmodel); barrel points +Z ---- */
 export function buildWeaponModel(key) {
+  const glb = buildWeaponModelGLB(key); if (glb) return glb;   // Blender weapon model when models/weapons.glb is loaded
   const g = new THREE.Group();
   const black = new THREE.MeshStandardMaterial({ color: 0x23272e, roughness: .5, metalness: .45 });
   const dark = new THREE.MeshStandardMaterial({ color: 0x15181d, roughness: .6, metalness: .3 });
@@ -263,7 +266,7 @@ export function updateAgentVisual(a) {
     else applyChams(a, false);
   }
   a.body.g.position.set(a.pos.x, a.pos.y, a.pos.z);
-  a.body.legs.rotation.y = a.realYaw || a.yaw;
+  if (!a.body.glb) a.body.legs.rotation.y = a.realYaw || a.yaw;   // GLB: the Hips bone gets it after the mixer (updateBodyGLB)
   let upperYaw = a.yaw;
   const jit = (aa.jitter != null ? aa.jitter : 55) * Math.PI / 180;
   if (aa.on && !(a.exposeT > 0)) {          // exposed by an un-hidden shot → the body snaps to the real angle
@@ -276,19 +279,23 @@ export function updateAgentVisual(a) {
     else if (aa.yaw === "sway") upperYaw = a.yaw + Math.PI + Math.sin(clock.t * 2.6 + a.pos.z * 0.01) * jit;
     else if (aa.yaw === "rand") upperYaw = a.yaw + (a._randYaw || 0);   // re-rolled on the desync side cadence
   }
-  a.body.upper.rotation.y = upperYaw;
   const aimP = aa.on ? (aa.pitch === "down" ? 0.5 : aa.pitch === "up" ? -0.5 : 0) : 0;
-  a.body.upper.rotation.x = aimP * 0.4;
   // fake duck renders the stance you are NOT in, so a human aiming at the model is aiming at the fake
   // (the hitboxes an aimbot reads stay on the real one — that half is the desync offset's job)
   const shown = (aa.on && aa.fakeduck && !(a.exposeT > 0)) ? !a.crouch : a.crouch;
-  const sc = shown ? 0.72 : 1; a.body.upper.position.y = shown ? 44 - 12 : 44; a.body.legs.scale.y = sc;   // 44 = waist pivot (see body build)
+  if (a.body.glb) {   // rigged GLB: stance/walk/run come from the clips; anti-aim is composed onto the bones after the mixer runs
+    const b = a.body; b.realYaw = a.realYaw || a.yaw; b.aimYaw = upperYaw; b.lean = aimP * 0.4; b.pitch = a.pitch; b.crouchShown = shown;
+    const dt = Math.min(0.05, Math.max(0, clock.t - (a._visT == null ? clock.t : a._visT))); a._visT = clock.t; updateBodyGLB(a, dt);
+  } else {
+    a.body.upper.rotation.y = upperYaw; a.body.upper.rotation.x = aimP * 0.4;
+    const sc = shown ? 0.72 : 1; a.body.upper.position.y = shown ? 44 - 12 : 44; a.body.legs.scale.y = sc;   // 44 = waist pivot (see body build)
+  }
   if (a._wmKey !== a.cur) {
     a._wmKey = a.cur;
     if (a.body.weapon) a.body.holder.remove(a.body.weapon);
     a.body.weapon = buildWeaponModel(a.cur); a.body.weapon.scale.setScalar(1.0); a.body.holder.add(a.body.weapon);
   }
-  a.body.holder.rotation.x = -a.pitch;
+  if (!a.body.glb) a.body.holder.rotation.x = -a.pitch;   // GLB: holder is re-aimed from the hand bone in updateBodyGLB
 }
 function chamsVisible(human, a) { const e = eyePos(human); return losClear(e, hitboxCenter(a, 'chest')) || losClear(e, hitboxCenter(a, 'head')); }
 // local desync ghost: translucent see-through cyan model so you can read your own fake angle

@@ -56,6 +56,19 @@ export class Euler {
   set(x, y, z, order) { this.x = x; this.y = y; this.z = z; if (order) this.order = order; return this; }
 }
 
+export class Quaternion {   // identity-ish: enough for models.js' post-mixer twist to run without throwing
+  constructor(x = 0, y = 0, z = 0, w = 1) { this.x = x; this.y = y; this.z = z; this.w = w; }
+  set(x, y, z, w) { this.x = x; this.y = y; this.z = z; this.w = w; return this; }
+  copy(q) { return this.set(q.x, q.y, q.z, q.w); }
+  setFromAxisAngle(axis, angle) { const s = Math.sin(angle / 2); return this.set(axis.x * s, axis.y * s, axis.z * s, Math.cos(angle / 2)); }
+  multiply(q) { return this.multiplyQuaternions(this, q); } premultiply(q) { return this.multiplyQuaternions(q, this); }
+  multiplyQuaternions(a, b) {
+    const ax = a.x, ay = a.y, az = a.z, aw = a.w, bx = b.x, by = b.y, bz = b.z, bw = b.w;
+    return this.set(ax * bw + aw * bx + ay * bz - az * by, ay * bw + aw * by + az * bx - ax * bz, az * bw + aw * bz + ax * by - ay * bx, aw * bw - ax * bx - ay * by - az * bz);
+  }
+  invert() { this.x = -this.x; this.y = -this.y; this.z = -this.z; return this; }
+}
+
 export const MathUtils = {
   clamp: (v, a, b) => Math.max(a, Math.min(b, v)),
   lerp: (a, b, t) => a + (b - a) * t,
@@ -73,10 +86,18 @@ class Object3D {
   add(o) { this.children.push(o); if (o) o.parent = this; return this; }
   remove(o) { const i = this.children.indexOf(o); if (i >= 0) this.children.splice(i, 1); return this; }
   traverse(fn) { fn(this); for (const c of this.children) c.traverse && c.traverse(fn); }
-  lookAt() {} updateMatrixWorld() {} getWorldPosition(v) { return v ? v.copy(this.position) : this.position.clone(); } getWorldDirection(v) { return (v || new Vector3()).set(0, 0, -1); }
+  lookAt() {} updateMatrixWorld() {} updateWorldMatrix() {} getWorldQuaternion(q) { return q || new Quaternion(); } getWorldPosition(v) { return v ? v.copy(this.position) : this.position.clone(); } getWorldDirection(v) { return (v || new Vector3()).set(0, 0, -1); }
 }
 export class Group extends Object3D {}
 export class Scene extends Object3D { constructor() { super(); this.background = null; this.fog = null; } }
+// skinned-mesh / animation shims: the GLB model loader is browser-only; node only needs these to resolve
+export class Bone extends Object3D {}
+export class Skeleton { constructor(bones = []) { this.bones = bones; } }
+export class SkinnedMesh extends Object3D { constructor(geometry, material) { super(); this.geometry = geometry; this.material = material; this.isMesh = true; this.isSkinnedMesh = true; } bind(s) { this.skeleton = s; } }
+export class AnimationClip { constructor(name = '', duration = 0, tracks = []) { this.name = name; this.duration = duration; this.tracks = tracks; } static findByName(clips, name) { return (clips || []).find(c => c.name === name) || null; } }
+export class AnimationMixer { constructor(root) { this.root = root; } clipAction(clip) { const a = { play() { return a; }, stop() { return a; }, reset() { return a; }, fadeIn() { return a; }, fadeOut() { return a; }, crossFadeTo() { return a; }, setLoop() { return a; }, setEffectiveWeight() { return a; }, setEffectiveTimeScale() { return a; }, weight: 1, timeScale: 1, enabled: true, paused: false, clip }; return a; } update() {} stopAllAction() {} }
+Object3D.prototype.clone = function (recursive = true) { const c = new this.constructor(); c.name = this.name; c.position.copy(this.position); c.visible = this.visible; c.userData = { ...this.userData }; if (recursive) for (const ch of this.children) c.add(ch.clone(true)); return c; };
+Object3D.prototype.getObjectByName = function (name) { if (this.name === name) return this; for (const ch of this.children) { const f = ch.getObjectByName && ch.getObjectByName(name); if (f) return f; } return undefined; };
 
 class Mat { constructor(o = {}) { Object.assign(this, o); this.color = new Color(o.color || 0); this.emissive = new Color(o.emissive || 0); this.emissiveIntensity = o.emissiveIntensity ?? 1; } dispose() {} clone() { return new Mat(this); } }
 export class MeshStandardMaterial extends Mat {}
