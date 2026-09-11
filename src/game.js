@@ -7,13 +7,13 @@ import { TEAM, ECON, WEAPONS, NADES, ARMOR, EYE_STAND, GRAVITY, SHIFT_MAX_TICKS 
 import { CT_SPAWNS, T_SPAWNS, HOSTAGE_SPAWNS, RESCUE_ZONES, losClear } from './world.js';
 import { spawnAgent, applyPersona, BOT_PERSONAS, recolorAgent, eyePos, hitboxCenter, setViewmodel } from './agents.js';
 import { giveWeapon, selectBest, switchTo, killAgent } from './combat.js';
-import { botBuy, restoreAllEdges } from './ai.js';
+import { botBuy, restoreAllEdges, assignRoles } from './ai.js';
 import { agents, refs, GAME, FREEZE_TIME, ROUND_TIME, END_TIME, BUY_TIME } from './state.js';
 import { meshBackend } from './sourcemap.js';
 import { clearEffects, addExplosion, smokes, fires, nadeProjectiles } from './effects.js';
 import { sfxNade, sfxEquip } from './sfx.js';
 import { nadeMeshGLB } from './models.js';
-import { practiceArm, PRACTICE } from './practice.js';
+import { practiceArm, practiceSpawnOf } from './practice.js';
 import { centerMessage, showHint, updateAllHUD, updateHUDWeapons, addKillFeedText, damageFlash, doFlash, playBeep } from './hud.js';
 
 const $ = s => document.querySelector(s);
@@ -28,7 +28,7 @@ export function buildTeams() {
   let pi = 0;
   const n = Math.max(1, Math.min(12, GAME.botsPerTeam || 12));   // bots per team from the PLAY screen (up to 12 v 12)
   if (GAME.practice) {                                            // config range: enemy targets only (+ the armed guard), no teammates
-    for (let i = 0; i < n + 1; i++) { const b = spawnAgent(t2, false, "bot"); applyPersona(b, deck[(pi++) % deck.length]); }
+    for (let i = 0; i < 8; i++) { const b = spawnAgent(t2, false, "bot"); applyPersona(b, deck[(pi++) % deck.length]); }   // 6 targets + the anti-aimer + the fighter (practice.js roles)
     return;
   }
   for (let i = 0; i < n - 1; i++) { const b = spawnAgent(t1, false, "bot"); applyPersona(b, deck[(pi++) % deck.length]); }   // human + (n-1) = n
@@ -40,6 +40,7 @@ export function startRound() {
   GAME.phase = "buy"; GAME.freeze = FREEZE_TIME; GAME.buyTimer = BUY_TIME; GAME.timer = ROUND_TIME; GAME.winner = null; GAME.rescued = 0;
   clearEffects();
   restoreAllEdges();   // heal any nav edges bots temporarily cut last round — start every round fully connected
+  assignRoles();       // fresh push/hold/flank split and lanes, so the same twelve bots don't replay one plan
   const ctList = agents.filter(a => a.team === TEAM.CT), tList = agents.filter(a => a.team === TEAM.T);
   ctList.forEach((a, i) => resetAgentForRound(a, CT_SPAWNS[i % CT_SPAWNS.length]));
   tList.forEach((a, i) => resetAgentForRound(a, T_SPAWNS[i % T_SPAWNS.length]));
@@ -54,7 +55,7 @@ export function startRound() {
   });
   if (GAME.practice) {   // config range: no rounds — live at once, forever; targets unarmed, guard armed, you get a pistol and infinite money
     let gi = 0;
-    for (const a of agents) { if (a.isHuman) continue; resetAgentForRound(a, a.practiceGuard ? PRACTICE.guardSpawn : T_SPAWNS[(gi++) % T_SPAWNS.length]); practiceArm(a); }
+    for (const a of agents) { if (a.isHuman) continue; resetAgentForRound(a, practiceSpawnOf(a)); practiceArm(a); }   // each bot to its room's spot (updatePractice despawns the rooms you are not in)
     const h = refs.human; h.money = 16000; if (!h.slotSecondary) { giveWeapon(h, "usp"); h.cur = "usp"; }
     GAME.phase = "live"; GAME.freeze = 0; GAME.timer = 1e9; GAME.buyTimer = 1e9;
     updateAllHUD(); centerMessage("AIM PRACTICE", "targets respawn · B to buy anything · guard in the east lane fires back", 2.2);
@@ -359,4 +360,4 @@ export function updateAreas(dt) {
 }
 
 /* spectate on death */
-export function onHumanDeath() { centerMessage("YOU DIED", "Spectating — next round soon", 2); $("#scopeOverlay").style.display = "none"; refs.human.scoped = false; }
+export function onHumanDeath() { centerMessage("YOU DIED", GAME.practice ? "respawning in this room…" : "Spectating — next round soon", 2); $("#scopeOverlay").style.display = "none"; refs.human.scoped = false; }

@@ -266,8 +266,8 @@ export const meshBackend = {
     if (!hits.length) return { factor: 1, surfaces: 0, blocked: false };
     const ts = [];                                         // merge coincident faces (shared edges / flush walls)
     for (const h of hits) if (!ts.length || h.t - ts[ts.length - 1] > 1.0) ts.push(h.t);
-    const power = (WEAPONS[wepKey] ? WEAPONS[wepKey].penPct : 50) / 100;
-    const maxThick = Math.max(8, power * PEN.unitsPerPower);
+    const power = PEN.power[wepKey] || 1;                  // CS penetration power (pistols 1 … auto-snipers 2.5)
+    const maxThick = power * PEN.unitsPerPower;            // the thickest single surface this gun can punch
     let factor = 1, surfaces = 0;
     for (let i = 0; i < ts.length; i += 2) {
       const enterT = ts[i], exitT = (i + 1 < ts.length) ? ts[i + 1] : enterT + PEN.loneThickness;   // single-sided wall (decimated back face gone)

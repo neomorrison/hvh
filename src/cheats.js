@@ -120,6 +120,7 @@ function tabs() {
         sel("Yaw", ["back", "sideways", "spin", "jitter", "sway", "rand"], () => c.antiaim.yaw, v => c.antiaim.yaw = v, true),
         rng("Jitter / sway range", 0, 180, () => c.antiaim.jitter, v => c.antiaim.jitter = v, v => v + "°", true),
         sel("Pitch", ["down", "up", "zero"], () => c.antiaim.pitch, v => c.antiaim.pitch = v, true),
+        rng("Yaw offset", -180, 180, () => c.antiaim.yawOffset || 0, v => c.antiaim.yawOffset = v, v => v + "°", true),
       ] },
       { title: "Desync", rows: [
         sw("Desync", () => c.antiaim.desync, v => c.antiaim.desync = v),

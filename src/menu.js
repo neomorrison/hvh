@@ -29,8 +29,9 @@ function buildScene() {
   const body = makeBody('CT', false); dummy = { body, vel: new THREE.Vector3(), crouch: false, cheats: { antiaim: {} }, isHuman: false };
   body.g.position.set(0, 0, 0); scene.add(body.g);
   const gun = buildWeaponModel('scar'); body.weapon = gun; body.holder.add(gun);
-  if (body.glb) { body.realYaw = -FACE; body.aimYaw = -FACE; body.pitch = 0.05; }
+  if (body.glb) { body.realYaw = -FACE + 0.55; body.aimYaw = -FACE + 0.55; body.pitch = 0.05; }   // three-quarter stance, gun across the frame like the CS2 menu
   else { body.legs.rotation.y = 0; body.upper.rotation.y = 0; }
+  window.__menu = () => ({ dummy, scene, cam, builtWithGlb });   // live debug getter (probing the mount orientation from the console)
   // chams: flat, lit through-wall red like the ESP's "visible" colour
   const cham = new Map();
   body.g.traverse(o => { if (!o.isMesh) return; const arr = Array.isArray(o.material) ? o.material : [o.material]; const out = arr.map(m => { if (!cham.has(m)) { const c = m.clone(); c.color.setHex(0xff2a44); c.emissive = new THREE.Color(0x7a1020); c.roughness = 1; c.metalness = 0; cham.set(m, c); } return cham.get(m); }); o.material = Array.isArray(o.material) ? out : out[0]; });
@@ -53,12 +54,12 @@ function drawESP() {
 export function menuVisible() { const p = $('#startPanel'); return !!(p && p.classList.contains('show')); }
 let builtWithGlb = false;
 export function renderMenu() {
-  if (!scene || (!builtWithGlb && MODELS.player)) { buildScene(); builtWithGlb = !!MODELS.player; }   // rebuild once the rigged model has arrived
+  if (!scene || (dummy && !dummy.body.glb && MODELS.player)) { buildScene(); builtWithGlb = !!(dummy && dummy.body.glb); }   // rebuild once the rigged model has arrived
   document.body.classList.add('menu');   // hides the match HUD (index.html: body.menu #hud > *:not(#esp)) but keeps the ESP canvas
   const t = (performance.now() - t0) / 1000;
   cam.aspect = innerWidth / innerHeight; cam.updateProjectionMatrix();
   cam.position.set(Math.sin(t * 0.12) * 70, 74 + Math.sin(t * 0.3) * 3, 290); cam.lookAt(0, 40, 0);
-  if (dummy.body.glb) { dummy.body.aimYaw = -FACE + Math.sin(t * 0.5) * 0.08; updateBodyGLB(dummy, 1 / 60); }
+  if (dummy.body.glb) { dummy.body.aimYaw = -FACE + 0.55 + Math.sin(t * 0.5) * 0.06; dummy.body.pitch = 0.05 + Math.sin(t * 0.7) * 0.03; updateBodyGLB(dummy, 1 / 60); }   // slow scan + breathing
   renderer.render(scene, cam);
   drawESP();
 }

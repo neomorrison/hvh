@@ -76,19 +76,23 @@ export function makeBodyGLB(team, isHuman) {
   const pivot = (bn, name, atJoint) => { if (!bn || !bn.parent) return null; const p = bn.parent, piv = new THREE.Group(); piv.name = name; if (atJoint) { piv.position.copy(bn.position); bn.position.set(0, 0, 0); } p.add(piv); piv.add(bn); return piv; };
   const hipsPiv = pivot(hips, 'HipsTwist', false), spinePiv = pivot(spine, 'SpineTwist', false);
   const armPivL = pivot(armL, 'ArmPivotL', true), armPivR = pivot(armR, 'ArmPivotR', true);
+  const headPiv = pivot(head, 'HeadPivot', true);   // the head nods with the shown pitch (looking down really looks down)
   // the gun: on the chest, at the shoulder line, grip where the right hand rests. Pitch rotates this pivot
   // and the two arm pivots by the same angle about the same axis; the shoulders sit on that axis, so the
   // hands stay on the grip at every pitch (the offset from the axis to each shoulder is pure x).
   const holder = new THREE.Group(); holder.name = 'GunPivot';
   if (chest) { chest.add(holder); holder.position.set(0, GUN_PIVOT_Y, 0); } else g.add(holder);
   const gunMount = new THREE.Group(); gunMount.position.copy(GUN_OFFSET); holder.add(gunMount);
+  // knife mount: in the right hand, blade (+Z) along the hand bone (+Y) — used when the knife is out
+  const handR = bone('Hand.R'), handHolder = new THREE.Group(); handHolder.rotation.x = -Math.PI / 2; handHolder.position.set(0, 2, 0);
+  if (handR) handR.add(handHolder); else holder.add(handHolder);
   const mixer = new THREE.AnimationMixer(g), actions = {};
   for (const c of CLIPS) { const clip = THREE.AnimationClip.findByName(MODELS.playerClips || [], c); if (clip) { actions[c] = mixer.clipAction(clip); actions[c].enabled = true; actions[c].setEffectiveWeight(0); actions[c].play(); } }
   if (actions.idle) actions.idle.setEffectiveWeight(1);
   // fake "chest"/"belly" handles so recolorAgent() keeps working: they just point at the cloth material owner
   const clothHolder = { material: mats.cloth || mats[Object.keys(mats)[0]] || new THREE.MeshStandardMaterial() };
   return { g, upper: spine || g, legs: hips || g, head: head || clothHolder, chest: clothHolder, belly: clothHolder, holder: gunMount, weapon: null,
-           glb: true, mixer, actions, cur: 'idle', bones: { hips, spine, chest, head }, hipsPiv, spinePiv, armPivL, armPivR, gunPiv: holder,
+           glb: true, mixer, actions, cur: 'idle', bones: { hips, spine, chest, head }, hipsPiv, spinePiv, armPivL, armPivR, headPiv, gunPiv: holder, handHolder, knifeOut: false,
            realYaw: 0, aimYaw: 0, lean: 0, pitch: 0, kick: 0 };   // filled by updateAgentVisual each frame, applied after the mixer below
 }
 /* Drive a GLB body: blend to the right clip from movement state, then set the anti-aim / aim pose on the
@@ -112,16 +116,23 @@ export function updateBodyGLB(a, dt) {
     act.timeScale = THREE.MathUtils.clamp(sp / (b.cur === 'run' ? 220 : 120), 0.4, 1.8) * (moon ? -1 : 1);
   }
   b.mixer.update(dt);
-  const dy = b.aimYaw - b.realYaw;
+  const dy = b.aimYaw - b.realYaw, look = -(b.pitch || 0);   // shown pitch: up is +; rotating about +X by a NEGATIVE angle lifts +Z
   if (b.hipsPiv) b.hipsPiv.quaternion.setFromAxisAngle(_Y, b.realYaw + FACE);
-  if (b.spinePiv) b.spinePiv.quaternion.copy(_qy.setFromAxisAngle(_Y, dy)).multiply(_qx.setFromAxisAngle(_X, b.lean));
-  // gun + arms: pitch about the shoulder line (positive pitch in this game looks UP → rotate about +X negative);
-  // a recoil kick lifts the muzzle for a few frames
+  // the look is split down the chain so it reads as a person looking: torso 30%, head +55% on top of
+  // that, gun + arms the remaining 70% on top of the torso (chest already carries 30%)
+  if (b.spinePiv) b.spinePiv.quaternion.copy(_qy.setFromAxisAngle(_Y, dy)).multiply(_qx.setFromAxisAngle(_X, look * 0.3));
+  if (b.headPiv) b.headPiv.quaternion.setFromAxisAngle(_X, look * 0.55);
   const kick = b.kick > 0 ? b.kick * 0.18 : 0;
-  _qx.setFromAxisAngle(_X, -b.pitch - kick);
-  if (b.gunPiv) b.gunPiv.quaternion.copy(_qx);
-  if (b.armPivL) b.armPivL.quaternion.copy(_qx);
-  if (b.armPivR) b.armPivR.quaternion.copy(_qx);
+  if (b.knifeOut) {   // knife idle: arms hang, blade in the right hand (the chest gun mount is empty)
+    _qx.setFromAxisAngle(_X, 1.15);
+    if (b.armPivL) b.armPivL.quaternion.copy(_qx); if (b.armPivR) b.armPivR.quaternion.copy(_qx);
+    if (b.gunPiv) b.gunPiv.quaternion.identity();
+  } else {
+    _qx.setFromAxisAngle(_X, look * 0.7 - kick);
+    if (b.gunPiv) b.gunPiv.quaternion.copy(_qx);
+    if (b.armPivL) b.armPivL.quaternion.copy(_qx);
+    if (b.armPivR) b.armPivR.quaternion.copy(_qx);
+  }
   if (b.kick > 0) b.kick = Math.max(0, b.kick - dt * 8);
 }
 

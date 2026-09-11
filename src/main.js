@@ -5,7 +5,7 @@ import * as THREE from 'three';
 import { scene, camera, renderer } from './core.js';
 import { WEAPONS, TEAM, INACC, LAND_RECOVER, JUMP_VEL, BHOP_GAIN, BHOP_MAX, ECON, computeDamage } from './data.js';
 import { agents, refs, GAME, vm, clock, keys, input } from './state.js';
-import { WALLS, NODES, EDGES, segAABB, losClear, penetrate } from './world.js';
+import { WALLS, NODES, EDGES, segAABB, losClear, penetrate, clearWorld } from './world.js';
 import { updateEffects, nadeProjectiles, shotLines } from './effects.js';
 import { setViewmodel, updateAgentVisual, updateBacktrackGhosts, hitboxCenter, eyePos, updateViewmodel } from './agents.js';
 import { manualFire, aimbotFire, canShoot, fireWeaponCommon, fireDoubleTap, meleeAttack, moveAgent, computeBloom, startReload, finishReload, switchTo, selectBest, visibleTo, autoStopScale, baseMoveSpeed, recordTick, updateTickbase, beginSimFrame, applyFakeDuck } from './combat.js';
@@ -89,6 +89,7 @@ addEventListener('keydown', e => {
   if (isEditorOpen()) { keys[e.code] = true; editorKey(e.code); e.preventDefault(); return; }   // editor swallows input
   if (e.code === "KeyI" && GAME.phase !== "editor") { if (!GAME.injected) { showHint("No cheat loaded — INJECT it from the main menu first"); e.preventDefault(); return; } toggleCheatMenu(); e.preventDefault(); return; }
   if (GAME.phase === "warmup" || GAME.phase === "editor") return;
+  if (e.code === "Escape") { togglePause(); e.preventDefault(); return; }   // pause: resume or back to the main menu
   const human = refs.human;
   keys[e.code] = true;
   if (e.code === "KeyB") { const p = $("#buyPanel"); p.classList.contains("show") ? closeBuy() : openBuy(); }
@@ -183,7 +184,9 @@ function humanMove(dt) {
   // AUTO-STOP: shed exactly enough speed to reach the configured min hit chance — not a dead stop.
   // autoStopScale() solves for the largest speed whose bloom still makes the shot canShoot() picked,
   // so a close-range shot barely slows you and only a long one plants you. Knife is excluded inside.
-  if (c.aimbot.on && c.aimbot.autoStop && human.onGround) {
+  // Auto-stop is a movement assist, not part of the ragebot — gating it behind aimbot.on meant pressing
+  // F6 on its own silently did nothing.
+  if (c.aimbot.autoStop && human.onGround) {
     const w = WEAPONS[human.cur];
     // don't keep planting between shots on a slow non-auto (SSG/scout bolt cycle) — only stop when actually able to fire now
     const fireReady = human.fireCd <= 0 || (w && w.auto);
@@ -291,7 +294,7 @@ let last = performance.now();
 // at 2.5x by running extra (silent) sim steps per frame, with an on-screen note. Auto-stops when the
 // round ends or the human respawns next round (the condition is derived, never latched).
 const ff = { accum: 0, banner: null, RATE: 2.5 };
-function ffShouldRun() { const h = refs.human; return GAME.phase === "live" && h && !h.alive; }
+function ffShouldRun() { const h = refs.human; return GAME.phase === "live" && !GAME.practice && h && !h.alive; }   // the range has no round to skip through
 function updateFFBanner() {
   if (!ff.banner) {
     ff.banner = document.createElement('div'); ff.banner.id = 'ffBanner';
@@ -462,6 +465,29 @@ function deployPractice() {
   renderer.domElement.requestPointerLock(); audio();
   showHint("aim_practice — targets respawn · B buys anything · the guard at the end of the lane shoots back");
 }
+// Esc under pointer lock is eaten by the browser (it releases the lock), so losing the lock mid-match with
+// nothing else open IS the Esc press: show the pause overlay
+document.addEventListener('pointerlockchange', () => {
+  if (document.pointerLockElement) return;
+  if (GAME.phase === "warmup" || GAME.phase === "editor" || GAME.phase === "idle") return;
+  if (anyPanelOpen() || $("#sbPanel").classList.contains("show") || document.getElementById("adminLogin")) return;
+  togglePause(true);
+});
+/* Esc: pause overlay; MAIN MENU tears the match down and brings the start screen back */
+function togglePause(force) {
+  const p = $("#pausePanel"); const show = force !== undefined ? force : !p.classList.contains("show");
+  p.classList.toggle("show", show);
+  if (show) document.exitPointerLock(); else if (!anyPanelOpen()) renderer.domElement.requestPointerLock();
+}
+function returnToMenu() {
+  togglePause(false); closeBuy(); $("#cheatPanel").classList.remove("show"); $("#sbPanel").classList.remove("show");
+  for (const a of agents) scene.remove(a.body.g); agents.length = 0; refs.human = null;
+  GAME.hostages.forEach(h => scene.remove(h.mesh)); GAME.hostages = [];
+  clearWorld(); setViewmodel(null, false);
+  GAME.phase = "warmup"; GAME.practice = false; GAME.customMap = null; GAME.sourceMap = null;
+  document.exitPointerLock(); $("#startPanel").classList.add("show");
+  preloadMainMap().catch(() => {});
+}
 /* the PLAY screen's DEPLOY: map + bots per team + side + whether the cheat is injected */
 function startFromMenu(opts) {
   GAME.botsPerTeam = Math.max(1, Math.min(12, opts.bots | 0 || 12));
@@ -508,6 +534,7 @@ async function deployMainMap() {
 function boot() {
   buildCrosshair();
   initMenu({ onDeploy: startFromMenu }); menuReady();     // CS2-style main menu (menu.js) — DEPLOY goes through startFromMenu
+  $("#pauseResume").onclick = () => togglePause(false); $("#pauseMenu").onclick = returnToMenu;
   preloadMainMap().catch(() => {});                      // warm the download while on the start screen
 }
 

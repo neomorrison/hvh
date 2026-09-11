@@ -185,7 +185,7 @@ export function updateBloomRing() {
   ring.style.display = "block";
   const bloom = computeBloom(human);
   const focal = (innerHeight / 2) / Math.tan((camera.fov * Math.PI / 180) / 2);
-  let dia = THREE.MathUtils.clamp(bloom * focal * 1.3, 6, 340);
+  let dia = THREE.MathUtils.clamp(2 * bloom * focal, 6, 600);   // the FULL cone: bloom is the half-width (tangent), so diameter = 2·bloom·focal — every round lands inside this ring
   ring.style.width = dia + "px"; ring.style.height = dia + "px";
   setCrosshairGap(THREE.MathUtils.clamp(dia * 0.22, 2, 80));
 }

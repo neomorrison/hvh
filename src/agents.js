@@ -8,6 +8,7 @@ import { TEAM, WEAPONS, ECON, EYE_STAND, EYE_CROUCH, MAX_BACKTRACK_TICKS, SHIFT_
 import { agents, refs, vm, clock, GAME } from './state.js';
 import { losClear } from './world.js';
 import { makeBodyGLB, updateBodyGLB, buildWeaponModelGLB } from './models.js';
+import { fakeDucking } from './combat.js';   // (cycle with combat.js is function-level only)
 
 export function makeBody(team, isHuman) {
   const glb = makeBodyGLB(team, isHuman); if (glb) return glb;   // rigged Blender model when models/player.glb is loaded
@@ -157,7 +158,7 @@ export function defaultCheats(aggressive) {
     // held (or between presses in toggle mode). It forces a real crouch, so leaving it permanently on
     // would leave you walking at a third speed with no way to stand up.
     antiaim: { on: aggressive, yaw: "jitter", jitter: 55, pitch: "down", desync: true, desyncAngle: 58, mode: "freestanding",
-      fakeduck: false, fakeduckKey: "KeyX", fakeduckMode: "hold", moonwalk: false },
+      fakeduck: false, fakeduckKey: "KeyX", fakeduckMode: "hold", moonwalk: false, yawOffset: 0 },
     // backtrack is in TICKS (12 tk @64 = 187ms). doubleTap and hideShots shift the tickbase in opposite
     // directions, so only one can apply to a given shot — double tap wins when both are on.
     tickbase: { backtrack: aggressive ? 12 : 0, hideShots: aggressive, doubleTap: false },
@@ -312,22 +313,27 @@ export function updateAgentVisual(a) {
     else if (aa.yaw === "sway") upperYaw = a.yaw + Math.PI + Math.sin(clock.t * 2.6 + a.pos.z * 0.01) * jit;
     else if (aa.yaw === "rand") upperYaw = a.yaw + (a._randYaw || 0);   // re-rolled on the desync side cadence
   }
-  const aimP = aa.on ? (aa.pitch === "down" ? 0.5 : aa.pitch === "up" ? -0.5 : 0) : 0;
+  if (aa.on && aa.yawOffset) upperYaw += aa.yawOffset * Math.PI / 180;   // yaw offset: turn the torso a fixed amount off whatever the mode says (180 = back to them)
+  // SHOWN PITCH — where the head, torso and gun look: your real view pitch (up = +) unless anti-aim fakes
+  // one, in which case the model looks all the way at the floor / ceiling, not a polite 12° nod
+  const shownPitch = aa.on && aa.pitch === "down" ? -1.25 : aa.on && aa.pitch === "up" ? 1.25 : (a.pitch || 0);
   // fake duck renders the stance you are NOT in, so a human aiming at the model is aiming at the fake
   // (the hitboxes an aimbot reads stay on the real one — that half is the desync offset's job)
-  const shown = (aa.on && aa.fakeduck && !(a.exposeT > 0)) ? !a.crouch : a.crouch;
+  const shown = (fakeDucking(a) && !(a.exposeT > 0)) ? !a.crouch : a.crouch;   // only WHILE fake ducking — merely arming it must not invert the stance
   if (a.body.glb) {   // rigged GLB: stance/walk/run come from the clips; anti-aim is composed onto the bones after the mixer runs
-    const b = a.body; b.realYaw = a.realYaw || a.yaw; b.aimYaw = upperYaw; b.lean = aimP * 0.4; b.pitch = a.pitch; b.crouchShown = shown;
+    const b = a.body; b.realYaw = a.realYaw || a.yaw; b.aimYaw = upperYaw; b.pitch = shownPitch; b.crouchShown = shown;
     const dt = Math.min(0.05, Math.max(0, clock.t - (a._visT == null ? clock.t : a._visT))); a._visT = clock.t; updateBodyGLB(a, dt);
   } else {
-    a.body.upper.rotation.y = upperYaw + Math.PI; a.body.upper.rotation.x = aimP * 0.4;
+    a.body.upper.rotation.y = upperYaw + Math.PI; a.body.upper.rotation.x = -shownPitch * 0.35;   // box torso tips with the shown pitch (looking down = positive x here)
     const sc = shown ? 0.72 : 1; a.body.upper.position.y = shown ? 44 - 12 : 44; a.body.legs.scale.y = sc;   // 44 = waist pivot (see body build)
   }
   if (a.unarmed) { if (a.body.weapon) { a.body.holder.remove(a.body.weapon); a.body.weapon = null; a._wmKey = null; } }   // practice targets carry nothing
   else if (a._wmKey !== a.cur) {
     a._wmKey = a.cur;
-    if (a.body.weapon) a.body.holder.remove(a.body.weapon);
-    a.body.weapon = buildWeaponModel(a.cur); a.body.weapon.scale.setScalar(1.0); a.body.holder.add(a.body.weapon);
+    if (a.body.weapon) { a.body.holder.remove(a.body.weapon); if (a.body.handHolder) a.body.handHolder.remove(a.body.weapon); }
+    // a gun mounts on the chest pivot (aim pose); a knife goes in the right hand with the arms relaxed
+    const melee = !!(WEAPONS[a.cur] && WEAPONS[a.cur].melee), mount = (melee && a.body.handHolder) ? a.body.handHolder : a.body.holder;
+    a.body.weapon = buildWeaponModel(a.cur); a.body.weapon.scale.setScalar(1.0); mount.add(a.body.weapon); a.body.knifeOut = melee && !!a.body.handHolder;
   }
   if (!a.body.glb) a.body.holder.rotation.x = -a.pitch;   // GLB: holder is re-aimed from the hand bone in updateBodyGLB
 }

@@ -276,7 +276,9 @@ export function updateTickbase(a, dt) {
   if (a.hideFx > 0) a.hideFx -= dt;
   // the server catches up on an off-clock tickbase at real time, one tick per tick
   if (a.shiftUsed > 0) { a.shiftUsed = Math.max(0, a.shiftUsed - dt / TICK); if (a.shiftUsed === 0) a.shiftMode = null; }
-  a.shiftCharge = Math.min(SHIFT_MAX_TICKS, (a.shiftCharge || 0) + (dt / TICK) * SHIFT_REGEN);
+  // the tickbase only RECHARGES once you have stopped shooting — the server can't be handed back
+  // ticks while you are still in a fight; a double tap in the open recomps when you are safe again
+  if (performance.now() - (a.lastShot || 0) > 600) a.shiftCharge = Math.min(SHIFT_MAX_TICKS, (a.shiftCharge || 0) + (dt / TICK) * SHIFT_REGEN);
   const aa = a.cheats.antiaim;
   if (!aa || !aa.on || !aa.desync) return;
   a._sideT = (a._sideT || 0) - dt;
@@ -389,21 +391,28 @@ export function resolveDesync(shooter, target) {
    of the bullet instead of a formula that happens to live next to it. */
 const TAU = Math.PI * 2;
 const _crRight = new THREE.Vector3(), _crUp = new THREE.Vector3(), _crTmp = new THREE.Vector3();
-export function coneRay(dir, cone, r01, phi, out) {
+/* THE ENGINE'S BULLET: dir + x·cone·right + y·cone·up, where x and y are each the sum of two
+   uniform(-0.5, 0.5) rolls (a triangular distribution over [-1, 1] — dense at the centre, thin at the
+   rim). `x`, `y` are those offsets in [-1, 1]; the pair is folded onto the unit disc so a round never
+   leaves the circle the HUD draws for the cone. */
+export function coneRay(dir, cone, x, y, out) {
   const o = (out || new THREE.Vector3()).copy(dir);
-  if (!(cone > 0) || !(r01 > 0)) return o;
+  if (!(cone > 0)) return o;
   _crTmp.set(0, 1, 0); if (Math.abs(dir.y) > 0.99) _crTmp.set(1, 0, 0);
   _crRight.crossVectors(dir, _crTmp).normalize();
   _crUp.crossVectors(_crRight, dir).normalize();
-  const rad = cone * r01;                                     // small-angle: adding rad then renormalising IS an angle of ~rad
-  return o.addScaledVector(_crRight, Math.cos(phi) * rad).addScaledVector(_crUp, Math.sin(phi) * rad).normalize();
+  const r = Math.hypot(x, y); if (r > 1) { x /= r; y /= r; }
+  return o.addScaledVector(_crRight, x * cone).addScaledVector(_crUp, y * cone).normalize();   // small-angle: cone is a tangent
 }
+/* one engine roll: (u1 - 0.5) + (u2 - 0.5) */
+export const triRoll = () => (Math.random() - 0.5) + (Math.random() - 0.5);
+const triInv = u => (u < 0.5 ? Math.sqrt(2 * u) - 1 : 1 - Math.sqrt(2 * (1 - u)));   // inverse CDF of that triangle
 
 /* The estimator walks a fixed set of quantiles of that same distribution instead of rolling dice, so
    the number doesn't shimmer frame to frame: radius (i+½)/N spans the uniform variate evenly and the
    golden angle keeps the directions from lining up into spokes. */
-const HC_N = 32, _hcR = new Float64Array(HC_N), _hcPhi = new Float64Array(HC_N);
-for (let i = 0; i < HC_N; i++) { _hcR[i] = (i + 0.5) / HC_N; _hcPhi[i] = i * Math.PI * (3 - Math.sqrt(5)); }
+const HC_N = 32, _hcR = new Float64Array(HC_N), _hcPhi = new Float64Array(HC_N);   // (x, y) quantiles of the engine's triangular roll, spread with the golden ratio so they never line up
+for (let i = 0; i < HC_N; i++) { _hcR[i] = triInv((i + 0.5) / HC_N); _hcPhi[i] = triInv((i * 0.6180339887498949) % 1); }
 const _hcDir = new THREE.Vector3(), _hcRay = new THREE.Vector3();
 
 /* Hit chance = the fraction of the spread cone that actually lands on the hitbox being aimed at,
@@ -619,7 +628,7 @@ export function baseMoveSpeed(a, combat) {
   if (a.bhopBoost) speed *= Math.min(BHOP_MAX, a.bhopBoost);
   return speed;
 }
-export function autoStopScale(a, combat) {
+export function autoStopScale(a, combat, keepClosing) {
   const w = WEAPONS[a.cur];
   if (!w || w.melee) return 1;                                     // never auto-stop on the knife
   const wp = a.weapons[a.cur];
@@ -631,7 +640,12 @@ export function autoStopScale(a, combat) {
   const vx = a.vel.x, vz = a.vel.z, full = baseMoveSpeed(a, combat);
   const accAt = sc => { a.vel.x = full * sc; a.vel.z = 0; const acc = computeAccuracy(a, cs.aimPoint, cs.body, cs.group, cs.exposure); a.vel.x = vx; a.vel.z = vz; return acc; };
   if (accAt(1) >= need) return 1;                                  // already accurate enough at full speed
-  if (accAt(0) < need) return 1;                                   // even planted this shot isn't makeable — don't root for nothing, keep closing
+  // Even planted, this shot doesn't reach the configured hit chance. Slowing is never WORSE for accuracy,
+  // so for a player who switched auto-stop on the answer is still "plant": returning full speed here
+  // silently switched auto-stop off at exactly the ranges you wanted it, which is why it read as doing
+  // nothing. A bot crossing open ground would genuinely rather close than root for an impossible shot —
+  // that judgement belongs to movement, so callers who want it pass keepClosing.
+  if (accAt(0) < need) return keepClosing ? 1 : 0;
   let lo = 0, hi = 1;
   for (let i = 0; i < 8; i++) { const mid = (lo + hi) / 2; if (accAt(mid) >= need) lo = mid; else hi = mid; }
   return lo;
@@ -703,7 +717,7 @@ export function manualFire(a) {
   const dir = new THREE.Vector3(0, 0, -1).applyEuler(new THREE.Euler(a.pitch, a.yaw, 0, 'YXZ'));
   let spread = computeBloom(a);
   if (a.cur === "r8" && a.fireMode === "fan") spread += 0.06;
-  coneRay(dir, spread, Math.random(), Math.random() * TAU, dir);    // same cone the hit-chance estimate samples
+  coneRay(dir, spread, triRoll(), triRoll(), dir);    // the engine's roll, in the same cone the hit-chance estimate samples
 
   if (meshBackend.active) { const brk = meshBackend.breakWindowsAlong(origin.x, origin.y, origin.z, dir.x, dir.y, dir.z, 9000); if (brk && brk.center) sfxImpact(brk.center, true); }   // shatter glass in the line of fire
   // nearest enemy hitbox along the ray (walls accounted for afterwards via penetration)
@@ -791,7 +805,7 @@ export function aimbotFire(a) {
       lostRead = true;
     }
     const dirAim = aimAt === cs.aimPoint ? dirTo : aimAt.clone().sub(me).normalize();
-    const dir = coneRay(dirAim, cone, Math.random(), Math.random() * TAU, new THREE.Vector3());
+    const dir = coneRay(dirAim, cone, triRoll(), triRoll(), new THREE.Vector3());
     const hit = traceHitbox(me, dir, body);
     // a bullet that strays into the cover we were peeking past is stopped by it, exactly as the
     // exposure term in the hit chance said it might be

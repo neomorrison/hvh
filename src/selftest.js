@@ -151,7 +151,7 @@ const CHECKS = [
     h.cheats.aimbot.autoScope = true; beginSimFrame(); aimbotFire(h); const on = h.scoped;
     return [!off && on, `off stays unscoped: ${!off} · on scopes: ${on}`];
   })],
-  ["aimbot · auto stop", () => stage(550, (h) => {
+  ["aimbot · auto stop", () => stage(1800, (h) => {   // far enough that a running USP fails the gate and a planted one passes it
     h.cheats.aimbot.hitchance = 50; beginSimFrame();
     const sc = autoStopScale(h, false);
     h.cur = 'knife'; beginSimFrame(); const knife = autoStopScale(h, false);
@@ -280,6 +280,7 @@ const CHECKS = [
   })],
   ["anti-aim · pitch", () => stage(300, (h, f) => {
     const mild = { yaw: 'back', desyncAngle: 20, fakeduck: false };        // clear of the aaQuality cap
+    f.pitch = 0;                                                            // the body shows the REAL pitch when no fake is up, so level it first
     desync(f, { ...mild, pitch: 'zero' }); updateAgentVisual(f); const flat = f.body.upper.rotation.x, qz = aaQuality(f);
     desync(f, { ...mild, pitch: 'down' }); updateAgentVisual(f); const down = f.body.upper.rotation.x, qd = aaQuality(f);
     desync(f, { ...mild, pitch: 'up' }); updateAgentVisual(f); const up = f.body.upper.rotation.x;

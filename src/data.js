@@ -38,19 +38,22 @@ export const INACC = {
   // shot is good but never free at range, and the per-shot bloom out-paces the fire rate, so spamming
   // collapses the cone and you have to tap. `stand`/`crouch` roughly doubled; `fire` bloom raised and
   // `max` lifted so a full spam actually reaches the cap.
-  deagle: { stand: 11.5, crouch: 8.6,  run: 62.0,   fire: 30, max: 115,  recov: 0.42 },
-  r8:     { stand: 4.6,  crouch: 2.9,  run: 12.0,   fire: 20, max: 62,   recov: 0.55 },   // still the precise pistol — but only one shot at a time
-  duals:  { stand: 15.5, crouch: 12.6, run: 30.0,   fire: 19, max: 105,  recov: 0.36 },
-  usp:    { stand: 11.0, crouch: 8.9,  run: 24.0,   fire: 20, max: 92,   recov: 0.38 },
-  glock:  { stand: 13.0, crouch: 10.6, run: 21.0,   fire: 20, max: 95,   recov: 0.36 },
-  ssg:    { stand: 3.23, crouch: 3.03, run: 155.43, fire: 0,  max: 10,   recov: 0.50, scopedStill: 0.35, unscoped: 48 },
-  // auto-snipers: pin-sharp FIRST scoped shot (scopedStill 0.35), but big per-shot bloom (fire) that
-  // recovers slower than the 0.25s fire interval (recov 0.55 half-life) — so spamming stacks toward the
-  // max cap and you must pause ~0.5-0.7s to reset. Matches CS2: accurate first shot, collapses if spammed.
-  scar:   { stand: 2.3,  crouch: 1.8,  run: 176.58, fire: 9,  max: 90,   recov: 0.55, scopedStill: 0.35, unscoped: 62 },
-  g3:     { stand: 2.3,  crouch: 1.8,  run: 176.58, fire: 8.5, max: 85,  recov: 0.55, scopedStill: 0.35, unscoped: 62 },   // G3SG1: fractionally smoother recoil than SCAR
+  // THE CS WEAPON-SCRIPT NUMBERS (inaccuracy stand / crouch / move / fire, with the static `spread`
+  // folded into stand+crouch). In the engine a bullet leaves along  forward + x·inacc·right + y·inacc·up
+  // with inacc = value / 1000 and x, y each the sum of two uniform(-0.5,0.5) rolls — so a value IS the
+  // cone's half-width as a tangent ×1000, and INACC_K is exactly 0.001. `recov` = the recovery time.
+  deagle: { stand: 26.6, crouch: 21.3, run: 46.0,  fire: 34.6, max: 160, recov: 0.37 },
+  r8:     { stand: 5.7,  crouch: 4.6,  run: 22.0,  fire: 27.0, max: 120, recov: 0.44 },
+  duals:  { stand: 15.5, crouch: 12.4, run: 28.5,  fire: 18.0, max: 140, recov: 0.34 },
+  usp:    { stand: 7.3,  crouch: 5.9,  run: 22.5,  fire: 21.7, max: 130, recov: 0.38 },
+  glock:  { stand: 9.1,  crouch: 7.3,  run: 23.2,  fire: 25.8, max: 130, recov: 0.31 },
+  ssg:    { stand: 118,  crouch: 94.4, run: 155.4, fire: 8.0,  max: 60,  recov: 0.40, scopedStill: 0.35, unscoped: 118 },
+  // auto-snipers: a pin-sharp first scoped shot (5.2 → 5u radius at 1000u), then `fire` stacks faster
+  // than the 0.25s cycle recovers, so a spam collapses and you pause to reset. Unscoped they are a shotgun.
+  scar:   { stand: 84,   crouch: 67,   run: 105,   fire: 9.3,  max: 90,  recov: 0.55, scopedStill: 5.2, unscoped: 84 },
+  g3:     { stand: 84,   crouch: 67,   run: 105,   fire: 8.5,  max: 85,  recov: 0.55, scopedStill: 5.2, unscoped: 84 },
 };
-export const INACC_K = 0.002;       // inaccuracy units -> cone half-angle radians (calibrated: USP stand ~0.013)
+export const INACC_K = 0.001;       // inaccuracy units -> cone half-width (tangent ≈ radians): the engine's value / 1000
 export const AIRBORNE_INACC = 130;  // jumping/in-air penalty (units)
 // landing inaccuracy: you are NOT instantly accurate after touching down (CS2).
 // Applied on landing (scaled by impact), then bleeds off over ~LAND_RECOVER.
@@ -119,13 +122,16 @@ export function dtTicks(key, fireMode) {
 
 // bullet penetration (autowall): weapon penPct doubles as penetration power.
 export const PEN = {
-  maxSurfaces: 4,        // CS2 stops a bullet after a few surfaces
-  unitsPerPower: 64,     // power(0..1) * this = max EFFECTIVE thickness one surface may be. Tuned
-                         // for the watertight physics hull (two-sided walls give REAL thickness;
-                         // 64 keeps ~85% of single office walls bangable, thick concrete/brick not).
+  maxSurfaces: 4,        // the engine gives up after four surfaces
+  // CS PENETRATION POWER per weapon (the weapon-script "penetration" value): pistols 1, Deagle/R8 2,
+  // SSG 2, auto-snipers 2.5. A surface can be punched if its thickness is under power × unitsPerPower
+  // (≈ the engine's penetration distance against a generic concrete-like material), and every
+  // surface crossed costs a flat entry loss plus a loss that grows with how much of that budget it ate.
+  power: { glock: 1, usp: 1, duals: 1, deagle: 2, r8: 2, ssg: 2, scar: 2.5, g3: 2.5 },
+  unitsPerPower: 24,     // power × this = max thickness one surface may be: pistols 24u (a door, a thin wall), rifles 48–60u
   loneThickness: 20,     // a single-sided (non-manifold) wall face is treated this thick
-  perSurfaceLoss: 0.10,  // flat damage loss for crossing any surface
-  thickLossK: 0.55,      // extra loss scaled by how thick the surface is vs the cap
+  perSurfaceLoss: 0.25,  // flat damage loss for crossing any surface
+  thickLossK: 0.60,      // extra loss scaled by how much of the thickness budget the surface used
 };
 
 /* damage model — returns {damage, armor} */
