@@ -15,14 +15,18 @@ export function loadSourceMap(glbBuffer, spawns, texturedScene, nav) {
   // 'windows' = reflective glass (visual+collision); 'clip' = invisible playable-boundary hull
   // (collision only, keeps players inside the real map); everything else is the world.
   const groups = parseGLBMeshes(glbBuffer);
-  const worldTris = concat(groups.filter(g => g.name !== 'windows' && g.name !== 'clip').map(g => g.tris));
+  // 'world_hard' (concrete / brick / metal) is world for everything, but each of its triangles is tagged
+  // so penetration can charge it the engine's hard-material modifier (see meshBackend.penetrate)
+  const softGroups = groups.filter(g => g.name !== 'windows' && g.name !== 'clip' && g.name !== 'world_hard'), hardGroup = groups.find(g => g.name === 'world_hard');
+  const worldTris = concat([...softGroups.map(g => g.tris), ...(hardGroup ? [hardGroup.tris] : [])]);
+  const triCls = new Uint8Array(worldTris.length / 9); if (hardGroup) triCls.fill(1, (worldTris.length - hardGroup.tris.length) / 9);
   const windowTris = (groups.find(g => g.name === 'windows') || {}).tris || new Float32Array(0);
   const clipTris = (groups.find(g => g.name === 'clip') || {}).tris || new Float32Array(0);
   if (!worldTris.length) throw new Error('No triangles found in the .glb (is it a map export?)');
   // floors / LOS / bullets / nav use the WORLD only. The clip hull and the window glass are
   // MOVEMENT-only (Source player_clip / breakable-glass semantics): they block walking but you
   // see and shoot through them, and shooting glass shatters it.
-  const bvh = new TriBVH(worldTris);
+  const bvh = new TriBVH(worldTris); bvh.cls = triCls;
   meshBackend.bvh = bvh; meshBackend.bounds = bvh.bounds; meshBackend.active = true;
   meshBackend.clipBvh = clipTris.length ? new TriBVH(clipTris) : null;
   meshBackend.windowBvh = null; meshBackend.windowPanes = []; meshBackend.windowTriPane = null;

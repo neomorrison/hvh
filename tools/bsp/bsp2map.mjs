@@ -66,23 +66,39 @@ function texInfo(mat, cap) {
 const sizeOf = (m, cap) => { const t = texInfo(m, cap); return t ? { w: t.w, h: t.h } : { w: 512, h: 512 }; };
 
 /* ---------------- collision ---------------- */
-const world = [], windows = [], clip = [];
+// MATERIAL HARDNESS: what a bullet meets. Concrete / brick / stone / metal blocks a rifle at a
+// fraction of the thickness drywall or wood does (the engine's per-material penetration modifier), so
+// collision is written in two groups — 'world' (soft: plaster, wood, carpet…) and 'world_hard' — and
+// the game grades each solid span by which one it entered.
+const HARD = /concrete|brick|stone|cinder|cement|metal|steel|rock|marble|tile|granite|asphalt|blacktop|iron|vend|safe|cabinet|filing|locker|dumpster|forklift|truck|car|van/i;
+const isHardBrush = b => (b.mats || []).some(m => HARD.test(m)) && !(b.mats || []).some(m => /glass|window|wood|plaster|drywall|carpet|paper|cardboard/i.test(m) && !HARD.test(m));
+const world = [], worldHard = [], windows = [], clip = [];
 const brushes = bsp.brushes(CONTENTS.SOLID | CONTENTS.PLAYERCLIP | CONTENTS.WINDOW | CONTENTS.GRATE);
-let nb = { world: 0, windows: 0, clip: 0 };
+let nb = { world: 0, hard: 0, windows: 0, clip: 0 };
 for (const b of brushes) {
   const c = b.contents;
-  const dst = (c & CONTENTS.WINDOW) ? windows : ((c & (CONTENTS.PLAYERCLIP | CONTENTS.GRATE)) && !(c & CONTENTS.SOLID)) ? clip : world;
+  const dst = (c & CONTENTS.WINDOW) ? windows : ((c & (CONTENTS.PLAYERCLIP | CONTENTS.GRATE)) && !(c & CONTENTS.SOLID)) ? clip : (isHardBrush(b) ? worldHard : world);
   const n = brushTriangles(b.planes, dst);
-  if (n) nb[dst === world ? 'world' : dst === windows ? 'windows' : 'clip']++;
+  if (n) nb[dst === world ? 'world' : dst === worldHard ? 'hard' : dst === windows ? 'windows' : 'clip']++;
 }
 const faces = bsp.faces(sizeOf), disps = bsp.displacements(sizeOf);
-for (const g of disps.groups) for (let i = 0; i < g.pos.length; i++) world.push(g.pos[i]);
-const props = readProps(bsp, pak);
+for (const g of disps.groups) { const dst = HARD.test(g.material) ? worldHard : world; for (let i = 0; i < g.pos.length; i++) dst.push(g.pos[i]); }
+// ENTITY PROPS: prop_physics / prop_dynamic are placed by the entity lump, not the static-prop lump —
+// cs_office has 226 of them (chairs, cabinets, vending machines, computers, the junk) and without
+// this they were neither drawn nor solid. Same reader as the static props; physics props are solid.
+const ents0 = bsp.entities();
+const num3 = s => (s || '0 0 0').trim().split(/\s+/).map(Number);
+const extras = ents0.filter(e => /^prop_(physics|dynamic)/.test(e.classname || '') && e.model && !/^\*/.test(e.model)).map(e => {
+  const [x, y, z] = num3(e.origin), [pitch, yaw, roll] = num3(e.angles);
+  const solid = e.solid != null ? +e.solid : 6;
+  return { model: e.model.toLowerCase().replace(/\\/g, '/'), origin: { x, y, z }, angles: { pitch, yaw, roll }, solid: /^prop_physics/.test(e.classname) ? 6 : solid };
+});
+const props = readProps(bsp, pak, extras);
 let propHullTris = 0;
-if (props) for (const planes of props.hulls) propHullTris += brushTriangles(planes, world);
+if (props) for (let i = 0; i < props.hulls.length; i++) { const planes = props.hulls[i]; const name = props.hullModel ? props.hullModel[i] : ''; propHullTris += brushTriangles(planes, HARD.test(name) ? worldHard : world); }
 
 const col = new GLB();
-for (const [nm, arr] of [['world', world], ['windows', windows], ['clip', clip]]) {
+for (const [nm, arr] of [['world', world], ['world_hard', worldHard], ['windows', windows], ['clip', clip]]) {
   if (!arr.length) continue;
   const pos = new Float32Array(arr);
   col.root(col.node({ name: nm, mesh: col.mesh([{ attributes: { POSITION: col.accessor(pos, 'VEC3', 5126, true) } }]) }));
@@ -149,7 +165,7 @@ let navStat = 'no nav';
 if (navPath) { const nav = parseNav(readFileSync(navPath)); const g = navToGraph(nav); writeFileSync(join(outDir, name + '.nav.json'), JSON.stringify(g)); navStat = `nav v${nav.version}: ${nav.areas.size} areas → ${g.nodes.length} nodes, ${Object.values(g.edges).reduce((s, e) => s + e.length, 0)} edges`; }
 
 const texOk = [...texCache.values()].filter(t => t && t.png).length, texMiss = [...texCache.values()].filter(t => !t || !t.png).length;
-console.log(`${name}: brushes world ${nb.world} / windows ${nb.windows} / clip ${nb.clip} → collision tris ${world.length / 9 | 0} (+${propHullTris} prop hull tris) / win ${windows.length / 9 | 0} / clip ${clip.length / 9 | 0}`);
+console.log(`${name}: brushes soft ${nb.world} / hard ${nb.hard} / windows ${nb.windows} / clip ${nb.clip} → collision tris soft ${world.length / 9 | 0} hard ${worldHard.length / 9 | 0} (+${propHullTris} prop hull tris, ${extras.length} entity props) / win ${windows.length / 9 | 0} / clip ${clip.length / 9 | 0}`);
 console.log(`faces drawn ${faces.drawn} skipped ${faces.skipped} displacements ${disps.count}; props: ${props ? `${props.stats.drawn}/${props.stats.placed} placed, ${props.stats.models} models, ${props.stats.missing} missing, ${props.stats.solidProps} solid` : 'none'}`);
 console.log(`textures ${texOk} ok / ${texMiss} missing; spawns CT ${spawns.ctSpawns.length} T ${spawns.tSpawns.length} hostages ${spawns.hostages.length} rescue ${spawns.rescueZones.length}; ${navStat}`);
 for (const p of vpks) p.close();

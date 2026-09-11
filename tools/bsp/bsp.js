@@ -293,19 +293,20 @@ class Bsp {
          collision — and a trigger the size of a start room is then a solid
          block you spawn inside. The texture flags say plainly what it is, so
          ask them. Bevel sides carry no texture and do not vote. */
-      let trigger = 0, surface = 0;
+      let trigger = 0, surface = 0; const mats = [];
       for (let k = 0; k < num; k++) {
         const s = sides[first + k];
         if (!s) continue;
         if (!s.bevel) {
           const face = tex[s.texinfo];
           if (face && ((face.flags & SURF_TRIGGER) || /toolstrigger|toolsclip|toolsnpcclip/i.test(face.name))) trigger++; else surface++;   // the flag is not always set (cs_office's buy zones)
+          if (face && face.name) mats.push(face.name);   // what the brush is made of — the converter grades penetration by it
         }
         const p = planes[s.planenum];
         ps.push(t ? { x: p.x, y: p.y, z: p.z, d: p.d + p.x * t.x + p.y * t.y + p.z * t.z } : p);
       }
       if (trigger && !surface) continue;
-      if (ps.length >= 4) out.push({ planes: ps, contents });
+      if (ps.length >= 4) out.push({ planes: ps, contents, mats });
     }
     return out;
   }
