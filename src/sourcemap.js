@@ -264,17 +264,32 @@ export const meshBackend = {
     const hits = this.bvh.collect(o.x, o.y, o.z, ux, uy, uz, len - 0.5);
     if (this.patchBvh) { for (const h of this.patchBvh.collect(o.x, o.y, o.z, ux, uy, uz, len - 0.5)) hits.push(h); hits.sort((p, q) => p.t - q.t); }
     if (!hits.length) return { factor: 1, surfaces: 0, blocked: false };
-    const ts = [];                                         // merge coincident faces (shared edges / flush walls)
-    for (const h of hits) if (!ts.length || h.t - ts[ts.length - 1] > 1.0) ts.push(h.t);
+    // SOLID SPANS, not face pairs. The hull is convex brushes with outward faces: a face whose normal
+    // opposes the ray is where the bullet ENTERS solid, one that agrees is where it LEAVES. A depth
+    // counter turns any stack of brushes (a wall made of three, a floor slab under a wall, two brushes
+    // flush against each other) into the real solid thickness along the ray. The old code paired
+    // consecutive faces blindly, so a flush pair of brushes read as two 20u walls — and a rifle went
+    // through the whole map.
     const power = PEN.power[wepKey] || 1;                  // CS penetration power (pistols 1 … auto-snipers 2.5)
-    const maxThick = power * PEN.unitsPerPower;            // the thickest single surface this gun can punch
-    let factor = 1, surfaces = 0;
-    for (let i = 0; i < ts.length; i += 2) {
-      const enterT = ts[i], exitT = (i + 1 < ts.length) ? ts[i + 1] : enterT + PEN.loneThickness;   // single-sided wall (decimated back face gone)
-      const effThick = Math.max(2, exitT - enterT);
-      surfaces++; if (surfaces > PEN.maxSurfaces) return { factor: 0, surfaces, blocked: true };
-      if (effThick > maxThick) return { factor: 0, surfaces, blocked: true };        // too thick to punch through
-      factor *= (1 - PEN.perSurfaceLoss) * (1 - (effThick / maxThick) * PEN.thickLossK);
+    const maxThick = power * PEN.unitsPerPower;            // the thickest single solid this gun can punch
+    let factor = 1, surfaces = 0, depth = 0, enterT = 0;
+    for (const h of hits) {
+      const facing = h.nx * ux + h.ny * uy + h.nz * uz;    // < 0: entering solid; > 0: leaving it
+      if (facing < 0) { if (depth === 0) enterT = h.t; depth++; }
+      else if (depth > 0) {                                // (a back face met in open air — the eye started inside a solid — is ignored)
+        depth--;
+        if (depth === 0) {
+          const thick = Math.max(2, h.t - enterT);
+          surfaces++; if (surfaces > PEN.maxSurfaces) return { factor: 0, surfaces, blocked: true };
+          if (thick > maxThick) return { factor: 0, surfaces, blocked: true };
+          factor *= (1 - PEN.perSurfaceLoss) * (1 - (thick / maxThick) * PEN.thickLossK);
+        }
+      }
+    }
+    if (depth > 0) {                                       // still inside solid at the target → it is buried; treat the open span as a lone wall
+      const thick = Math.max(2, len - enterT); surfaces++;
+      if (surfaces > PEN.maxSurfaces || thick > maxThick) return { factor: 0, surfaces, blocked: true };
+      factor *= (1 - PEN.perSurfaceLoss) * (1 - (thick / maxThick) * PEN.thickLossK);
     }
     return { factor: Math.max(0, factor), surfaces, blocked: false };
   },
