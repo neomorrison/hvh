@@ -47,10 +47,10 @@ export function buildPracticeMap() {
   cover(-470, -410, -200, -80, 64, matWood, 0.42); cover(-470, -410, 80, 200, 64, matWood, 0.42);
   cover(-470, -430, -80, -20, 96, matMetal, 0.85); cover(-470, -430, 20, 80, 96, matMetal, 0.85);
   cover(300, 316, -450, 450, 34, matPartition, 0.45);
-  // AA room: your cover box near the door, the AA bot's half wall at the far end
-  cover(-440, -320, 660, 720, 64, matWood, 0.42); cover(-560, -200, 1100, 1120, 44, matMetal, 0.85);
-  // FIGHT room: cover for both sides
-  cover(320, 440, 660, 720, 64, matWood, 0.42); cover(200, 560, 1100, 1120, 44, matMetal, 0.85); cover(560, 640, 860, 960, 96, matMetal, 0.85);
+  // your cover in both south rooms is 54u: a crouched player (hitboxes to ~52u) is fully behind it,
+  // standing up exposes head + chest — so the peek is a real stand-up, not a head glance over a wall
+  cover(-460, -300, 660, 720, 54, matWood, 0.42); cover(-560, -200, 1100, 1120, 44, matMetal, 0.85);   // AA room: your box, its half wall
+  cover(300, 460, 660, 720, 54, matWood, 0.42); cover(200, 560, 1100, 1120, 44, matMetal, 0.85);       // FIGHT room: your box, its half wall
   flushSpecs();
   // open sky
   scene.background = new THREE.Color(0x8fbbe8); scene.fog = new THREE.Fog(0xb9d3ee, 2500, 8000);
