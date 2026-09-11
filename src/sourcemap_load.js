@@ -10,7 +10,7 @@ import { parseGLB, parseGLBMeshes, TriBVH, meshBackend } from './sourcemap.js';
 
 function concat(arrays) { let n = 0; for (const a of arrays) n += a.length; const o = new Float32Array(n); let p = 0; for (const a of arrays) { o.set(a, p); p += a.length; } return o; }
 
-export function loadSourceMap(glbBuffer, spawns, texturedScene) {
+export function loadSourceMap(glbBuffer, spawns, texturedScene, nav) {
   clearWorld();                                            // also deactivates any prior mesh backend
   // 'windows' = reflective glass (visual+collision); 'clip' = invisible playable-boundary hull
   // (collision only, keeps players inside the real map); everything else is the world.
@@ -99,7 +99,7 @@ export function loadSourceMap(glbBuffer, spawns, texturedScene) {
   MAP_BOUNDS.minX = Math.max(b.min[0], mnX - MARGIN); MAP_BOUNDS.maxX = Math.min(b.max[0], mxX + MARGIN);
   MAP_BOUNDS.minZ = Math.max(b.min[2], mnZ - MARGIN); MAP_BOUNDS.maxZ = Math.min(b.max[2], mxZ + MARGIN);
 
-  generateMeshNav();
+  if (nav && nav.nodes && nav.nodes.length) loadNavGraph(nav); else generateMeshNav();
   addCeilingLights();                                      // warm point lights under the office ceilings (uses nav nodes)
   return { triangles: (worldTris.length + windowTris.length) / 9, bounds: b, ctSpawns: CT_SPAWNS.length, tSpawns: T_SPAWNS.length, navNodes: NODES.length };
 }
@@ -242,6 +242,13 @@ function clusterWindowPanes(tris) {
    We therefore sample EVERY standable floor level per column (multi-storey), connect walkable
    neighbours, then PRUNE to what's actually reachable from the spawns — which deletes the roof
    and any out-of-bounds shelf the player can never stand on. */
+/* The map's OWN bot mesh (Source .nav via tools/bsp/bsp2map.mjs): walkable areas the game's authors laid
+   out, so bots path where a player can actually walk instead of where a floor ray happened to land. */
+export function loadNavGraph(nav) {
+  NODES.length = 0; for (const k in EDGES) delete EDGES[k];
+  for (const n of nav.nodes) { const p = new THREE.Vector3(n.p[0], n.p[1], n.p[2]); NODES.push({ id: n.id, p, y: p.y }); EDGES[n.id] = []; }
+  for (const k in nav.edges) if (EDGES[k]) EDGES[k] = nav.edges[k].filter(j => NODES[j]);
+}
 export function generateMeshNav() {
   NODES.length = 0; for (const k in EDGES) delete EDGES[k];
   const { minX, maxX, minZ, maxZ } = MAP_BOUNDS; const top = meshBackend.bounds.max[1] + 60;

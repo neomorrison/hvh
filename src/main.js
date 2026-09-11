@@ -433,10 +433,10 @@ function deploy() {
   audio();
 }
 
-function deploySource(glb, spawns, texturedScene) {
+function deploySource(glb, spawns, texturedScene, nav) {
   $("#startPanel").classList.remove("show");
   GAME.customMap = null; GAME.sourceMap = spawns.name || "imported"; GAME.phase = "idle";
-  const info = loadSourceMap(glb, spawns, texturedScene);
+  const info = loadSourceMap(glb, spawns, texturedScene, nav);
   loadPatches(GAME.sourceMap, texturedScene);   // re-apply saved map patches (collision + hidden surfaces)
   GAME.round = 1; GAME.half = 1; GAME.scoreCT = 0; GAME.scoreT = 0; GAME.lossStreak = { CT: 0, T: 0 };
   assignHumanTeam();
@@ -453,6 +453,7 @@ function preloadMainMap() {
   mainMapAssets = Promise.all([
     fetch(MAIN_MAP.glb).then(r => { if (!r.ok) throw new Error("map geometry " + r.status); return r.arrayBuffer(); }),
     fetch(MAIN_MAP.spawns).then(r => r.ok ? r.json() : {}),
+    fetch("./maps/cs_office.nav.json").then(r => r.ok ? r.json() : null).catch(() => null),   // the map's own bot mesh (optional)
   ]);
   return mainMapAssets;
 }
@@ -470,10 +471,10 @@ async function deployMainMap() {
   const ls = $("#loadStat");
   try {
     if (ls) ls.textContent = "Loading cs_office…";
-    const [glb, spawns] = await (mainMapAssets || preloadMainMap());
+    const [glb, spawns, nav] = await (mainMapAssets || preloadMainMap());
     spawns.name = spawns.name || MAIN_MAP.name;
     const tex = await loadTexturedMap("./maps/cs_office.tex.glb");   // optional, user-supplied real textures
-    deploySource(glb, spawns, tex);
+    deploySource(glb, spawns, tex, nav);
   } catch (e) {                                          // bundled map unreachable → procedural blockout
     console.warn("cs_office mesh map unavailable, using procedural layout:", e);
     if (ls) ls.textContent = "";
