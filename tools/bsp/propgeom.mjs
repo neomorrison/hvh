@@ -106,8 +106,11 @@ function planesOf(verts, tris) {
  * it is skipped rather than guessed at: a prop referring to content the map
  * did not pack is a prop the map's own server could not have drawn either.
  */
-export function readProps(bsp, pak) {
+export function readProps(bsp, pak, extra = []) {
   const placed = readStaticProps(bsp);
+  // entity props (prop_physics / prop_dynamic) live in the entity lump, not the static-prop lump —
+  // the caller hands them in already shaped like static props ({ model, origin, angles, solid })
+  for (const p of extra) placed.props.push(p);
   if (!placed.props.length) return null;
 
   const models = [];
@@ -169,7 +172,7 @@ export function readProps(bsp, pak) {
   };
 
   const instances = [];
-  const hulls = [];
+  const hulls = [], hullModel = [];   // hullModel[i] = the model path hulls[i] came from (the converter grades hardness by it)
   let solidProps = 0;
 
   for (const prop of placed.props) {
@@ -198,13 +201,13 @@ export function readProps(bsp, pak) {
         return toY(x, y, z);
       });
       const planes = planesOf(verts, h.tris);
-      if (planes.length >= 4) hulls.push(planes);
+      if (planes.length >= 4) { hulls.push(planes); hullModel.push(prop.model); }
     }
   }
 
   return {
     models: models.map(m => ({ meshes: m.meshes })),
-    instances, hulls,
+    instances, hulls, hullModel,
     stats: {
       placed: placed.props.length, drawn: instances.length,
       models: models.length, missing: missing.size, solidProps,

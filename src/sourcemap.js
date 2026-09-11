@@ -218,7 +218,7 @@ export class TriBVH {
       const node = this.nodes[stack.pop()];
       if (this._rayBox(node, ox, oy, oz, idx, idy, idz) > maxT) continue;
       if (node.s < 0) { stack.push(node.l, node.r); continue; }
-      for (let i = node.s; i < node.e; i++) { if (this.alive && !this.alive[this.idx[i]]) continue; const b = this.idx[i] * 9; const h = rayTri(ox, oy, oz, dx, dy, dz, T, b, maxT); if (h && h.t > 1e-3) hits.push(h); }
+      for (let i = node.s; i < node.e; i++) { if (this.alive && !this.alive[this.idx[i]]) continue; const b = this.idx[i] * 9; const h = rayTri(ox, oy, oz, dx, dy, dz, T, b, maxT); if (h && h.t > 1e-3) { h.tri = this.idx[i]; hits.push(h); } }
     }
     hits.sort((a, b) => a.t - b.t); return hits;
   }
@@ -272,25 +272,25 @@ export const meshBackend = {
     // through the whole map.
     const power = PEN.power[wepKey] || 1;                  // CS penetration power (pistols 1 … auto-snipers 2.5)
     const maxThick = power * PEN.unitsPerPower;            // the thickest single solid this gun can punch
-    let factor = 1, surfaces = 0, depth = 0, enterT = 0;
+    // MATERIAL: the face a span was entered through says what it is made of (bvh.cls, 1 = concrete /
+    // brick / metal…). A hard material takes the engine's penetration modifier: the same gun punches
+    // only a third of the thickness it would through drywall or wood.
+    const cls = this.bvh.cls;
+    let factor = 1, surfaces = 0, depth = 0, enterT = 0, hard = false;
+    const close = (exitT) => {
+      const cap = maxThick * (hard ? PEN.hardModifier : 1), thick = Math.max(2, exitT - enterT);
+      surfaces++; if (surfaces > PEN.maxSurfaces || thick > cap) return false;
+      factor *= (1 - PEN.perSurfaceLoss) * (1 - (thick / cap) * PEN.thickLossK); return true;
+    };
     for (const h of hits) {
       const facing = h.nx * ux + h.ny * uy + h.nz * uz;    // < 0: entering solid; > 0: leaving it
-      if (facing < 0) { if (depth === 0) enterT = h.t; depth++; }
+      if (facing < 0) { if (depth === 0) { enterT = h.t; hard = !!(cls && h.tri != null && cls[h.tri]); } else if (cls && h.tri != null && cls[h.tri]) hard = true; depth++; }
       else if (depth > 0) {                                // (a back face met in open air — the eye started inside a solid — is ignored)
         depth--;
-        if (depth === 0) {
-          const thick = Math.max(2, h.t - enterT);
-          surfaces++; if (surfaces > PEN.maxSurfaces) return { factor: 0, surfaces, blocked: true };
-          if (thick > maxThick) return { factor: 0, surfaces, blocked: true };
-          factor *= (1 - PEN.perSurfaceLoss) * (1 - (thick / maxThick) * PEN.thickLossK);
-        }
+        if (depth === 0 && !close(h.t)) return { factor: 0, surfaces, blocked: true };
       }
     }
-    if (depth > 0) {                                       // still inside solid at the target → it is buried; treat the open span as a lone wall
-      const thick = Math.max(2, len - enterT); surfaces++;
-      if (surfaces > PEN.maxSurfaces || thick > maxThick) return { factor: 0, surfaces, blocked: true };
-      factor *= (1 - PEN.perSurfaceLoss) * (1 - (thick / maxThick) * PEN.thickLossK);
-    }
+    if (depth > 0 && !close(len)) return { factor: 0, surfaces, blocked: true };   // still inside solid at the target → it is buried
     return { factor: Math.max(0, factor), surfaces, blocked: false };
   },
   // floor Y under (x,z), searching from (fromY + reach) downward; -Infinity if nothing.

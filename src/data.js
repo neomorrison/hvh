@@ -129,6 +129,7 @@ export const PEN = {
   // surface crossed costs a flat entry loss plus a loss that grows with how much of that budget it ate.
   power: { glock: 1, usp: 1, duals: 1, deagle: 2, r8: 2, ssg: 2, scar: 2.5, g3: 2.5 },
   unitsPerPower: 24,     // power × this = max thickness one surface may be: pistols 24u (a door, a thin wall), rifles 48–60u
+  hardModifier: 0.35,    // concrete / brick / metal (collision group 'world_hard'): a third of that thickness
   loneThickness: 20,     // a single-sided (non-manifold) wall face is treated this thick
   perSurfaceLoss: 0.15,  // flat damage loss for crossing any surface (CS: a thin wall costs a rifle ~15–25%)
   thickLossK: 0.50,      // extra loss scaled by how much of the thickness budget the surface used
