@@ -103,7 +103,7 @@ export function moveAgent(a, dirXZ, dt, combat) {
       const sp = a.team === TEAM.CT ? CT_SPAWNS : T_SPAWNS;
       if (sp.length) { const s = sp[(Math.random() * sp.length) | 0]; a.pos.set(s.x, s.y || 0, s.z); const gg = meshBackend.groundHeight(s.x, s.z, (s.y || 0), 24); if (gg > -1e8) a.pos.y = gg; }
       a.vel.set(0, 0, 0); a.onGround = true; a.aiPath = []; a.aiTimer = 0;
-      a.eye = (a.crouch ? EYE_CROUCH : EYE_STAND) + a.pos.y;
+      a.eye = ((a.crouch && !fakeDucking(a)) ? EYE_CROUCH : EYE_STAND) + a.pos.y;   // fake duck: the eye stays up (you shoot over the cover your hitboxes hide behind)
       return;
     }
     // imported mesh map: slide along real walls (above the step zone so stairs stay walkable),
@@ -151,7 +151,7 @@ export function moveAgent(a, dirXZ, dt, combat) {
       a.pos.x = Math.min(Math.max(a.pos.x, MAP_BOUNDS.minX + PLAYER_RADIUS), MAP_BOUNDS.maxX - PLAYER_RADIUS);
       a.pos.z = Math.min(Math.max(a.pos.z, MAP_BOUNDS.minZ + PLAYER_RADIUS), MAP_BOUNDS.maxZ - PLAYER_RADIUS);
     }
-    a.eye = (a.crouch ? EYE_CROUCH : EYE_STAND) + a.pos.y;
+    a.eye = ((a.crouch && !fakeDucking(a)) ? EYE_CROUCH : EYE_STAND) + a.pos.y;   // fake duck: the eye stays up (you shoot over the cover your hitboxes hide behind)
     return;
   }
   if (a.pos.y < 0) {
@@ -162,7 +162,7 @@ export function moveAgent(a, dirXZ, dt, combat) {
     }
     a.vel.y = 0; a.onGround = true;
   } else { a.onGround = false; a._landedThisFrame = false; }
-  a.eye = (a.crouch ? EYE_CROUCH : EYE_STAND) + a.pos.y;
+  a.eye = ((a.crouch && !fakeDucking(a)) ? EYE_CROUCH : EYE_STAND) + a.pos.y;   // fake duck: the eye stays up (you shoot over the cover your hitboxes hide behind)
   depenetrateAgents(a);                                       // body-vs-body push
   collideMove(a.pos, PLAYER_RADIUS, a.pos.y, a.crouch ? 46 : 72);   // then re-resolve walls
 }
@@ -374,8 +374,14 @@ export function resolveDesync(shooter, target) {
   else {
     // the anti-aim degrades the guess, but a resolver still has the animation layers, the eye
     // angles and the last known real yaw to work from — it is never reduced to a coin flip
-    p = strength * (1 - aaQuality(target) * 0.6);
-    if (mode === "brute") p = Math.min(0.95, p * 0.85 + b.n * 0.12);   // starts worse, converges faster
+    p = strength * (1 - aaQuality(target) * 0.5);
+    // a target that is standing still is the easiest read there is (animation layers + a fixed eye
+    // position give the real yaw away): every second you keep it in view adds to the read, up to +0.25
+    const w = shooter._watch || (shooter._watch = new Map()); let ww = w.get(target);
+    const still = Math.hypot(target.vel.x, target.vel.z) < 5;
+    if (!ww || clock.t - ww.t > 1.5) ww = { t: clock.t, s: 0 }; ww.s = still ? Math.min(2, ww.s + (clock.t - ww.t)) : Math.max(0, ww.s - (clock.t - ww.t)); ww.t = clock.t; w.set(target, ww);
+    p = Math.min(0.96, p + 0.25 * (ww.s / 2));
+    if (mode === "brute") p = Math.min(0.96, p * 0.85 + b.n * 0.12);   // starts worse, converges faster
     else if (mode === "onshot") p *= 0.5;                             // blind between exposures
   }
   const ok = Math.random() < p;
@@ -834,7 +840,10 @@ export function aimbotFire(a) {
   };
   fireWeaponCommon(a);          // arms _dtPending if this shot won a forward shift
   resolve(approved);
-  fireDoubleTap(a, () => resolve(computeBloom(a)));
+  // both rounds of a double tap leave in the SAME server tick, so the second one gets the cone the gate
+  // approved — not the one the first round's fire penalty just widened (that penalty lands on the next
+  // tick). Rolling the second round against the widened cone is what logged "missed — inaccuracy" at 100%.
+  fireDoubleTap(a, () => resolve(approved));
   return true;
 }
 

@@ -296,8 +296,8 @@ try {
     human.cheats.resolver.on = false;
     const off = rate();
     log('  resolver vs desync — naked', (naked * 100) | 0, '%· full anti-aim', (dressed * 100) | 0, '%· right after their shot', (afterShot * 100) | 0, '%· resolver off', (off * 100) | 0, '%');
-    if (!(naked > dressed + 0.1)) { failures++; log('✗ anti-aim should visibly cost the resolver — it barely did'); }
-    if (!(dressed < 0.45)) { failures++; log('✗ a maxed anti-aim should beat the resolver more often than not'); }
+    if (!(naked > dressed + 0.07)) { failures++; log('✗ anti-aim should visibly cost the resolver — it barely did'); }   // a stronger resolver narrows the gap; it must still be there
+    if (!(dressed < afterShot - 0.05)) { failures++; log('✗ a read right after their shot should beat a blind guess against a maxed anti-aim'); }   // the resolver is meant to WIN most fights now; the AA still costs it (line above)
     if (!(naked < 0.75)) { failures++; log('✗ the resolver is still doing too much work on its own'); }
     if (!(afterShot > 0.85)) { failures++; log('✗ an un-hidden shot pins the real angles — that read should be near-certain'); }
     if (off !== 0) { failures++; log('✗ resolver off must never beat a desync'); }

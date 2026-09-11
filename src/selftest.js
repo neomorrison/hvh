@@ -313,9 +313,10 @@ const CHECKS = [
     h.crouch = false; h._fdActive = false; applyFakeDuck(h);
     const armedOnly = h.crouch, armedSpeed = fakeDuckScale(h);
     // ...held, the real stance goes down (hitboxes, eye, bloom) while the model keeps standing
-    h._fdActive = true; h.crouch = false; applyFakeDuck(h);
+    h._fdActive = true; h.crouch = false; h.exposeT = 0; applyFakeDuck(h);   // (no leftover exposure from an earlier test)
     const reallyDucked = h.crouch;
     updateAgentVisual(h); const shownScale = h.body.legs.scale.y;
+    h.exposeT = 0;   // an exposure left over from an earlier test would show the standing boxes
     const headTop = Math.max(...hitboxes(h).filter(x => x.group === "head").map(x => x.maxY));
     const slowed = fakeDuckScale(h);
     h.cheats.antiaim.fakeduck = false; h.crouch = false; applyFakeDuck(h);
@@ -325,9 +326,14 @@ const CHECKS = [
     // ...and it stands on its own: no desync, still a fake
     const fdOnly = desync(f, { desync: false, desyncAngle: 0, fakeduck: true });
     const lateral = fdOnly ? Math.hypot(fdOnly.x, fdOnly.z) : -1, vertical = fdOnly ? Math.abs(fdOnly.y) : 0;
-    return [flat === 0 && Math.abs(ducked) > 10 && qUp > qDown && reallyDucked && shownScale === 1
+    // the real-HvH fake duck: no faked HEIGHT (everyone sees you ducked, model included), the eye stays
+    // up, and your standing hitboxes exist only inside your own shot's exposure window
+    h.cheats.antiaim.fakeduck = true; h._fdActive = true; h.crouch = false; applyFakeDuck(h);
+    h.exposeT = 0.2; const exposedTop = Math.max(...hitboxes(h).filter(x => x.group === "head").map(x => x.maxY)); h.exposeT = 0;
+    h.cheats.antiaim.fakeduck = false; h._fdActive = false; h.crouch = false;
+    return [flat === 0 && ducked === 0 && qUp > qDown && reallyDucked && shownScale < 1
             && !armedOnly && armedSpeed === 1 && headTop < standTop - 10 && slowed < 1 && full === 1
-            && lateral === 0 && vertical > 10,
+            && lateral === 0 && vertical === 0 && exposedTop > headTop + 10,
       `armed does nothing until the key is held · held it really ducks (head drops ${Math.round(standTop - headTop)}u) ` +
       `while the model stands · works with desync off (${vertical}u vertical fake, no sideways) · costs the resolver ` +
       `(${qDown.toFixed(2)} → ${qUp.toFixed(2)}) and ${Math.round((1 - slowed) * 100)}% of your speed`];

@@ -103,7 +103,10 @@ export function updateBodyGLB(a, dt) {
   const b = a.body; if (!b || !b.glb) return;
   const sp = Math.hypot(a.vel.x, a.vel.z), moving = sp > 30;
   const crouch = b.crouchShown != null ? b.crouchShown : a.crouch;   // fake duck shows the stance you are NOT in
-  const want = crouch ? (moving ? 'crouch_walk' : 'crouch_idle') : (moving ? (sp > 150 ? 'run' : 'walk') : 'idle');
+  // moonwalk (the HvH one): NO walk/run animation at all — the legs stay in the idle pose and the body
+  // glides across the floor, which is what breaks a resolver that reads the movement layers
+  const moon = a.cheats && a.cheats.antiaim && a.cheats.antiaim.on && a.cheats.antiaim.moonwalk;
+  const want = crouch ? ((moving && !moon) ? 'crouch_walk' : 'crouch_idle') : ((moving && !moon) ? (sp > 150 ? 'run' : 'walk') : 'idle');
   if (want !== b.cur && b.actions[want]) {
     const from = b.actions[b.cur], to = b.actions[want];
     to.reset().setEffectiveWeight(1); to.timeScale = 1;
@@ -111,9 +114,7 @@ export function updateBodyGLB(a, dt) {
   }
   const act = b.actions[b.cur];
   if (act && (b.cur === 'walk' || b.cur === 'run' || b.cur === 'crouch_walk')) {
-    // moonwalk: the stride plays backwards while you move forwards (legs say "away", body goes "toward")
-    const moon = a.cheats && a.cheats.antiaim && a.cheats.antiaim.on && a.cheats.antiaim.moonwalk;
-    act.timeScale = THREE.MathUtils.clamp(sp / (b.cur === 'run' ? 220 : 120), 0.4, 1.8) * (moon ? -1 : 1);
+    act.timeScale = THREE.MathUtils.clamp(sp / (b.cur === 'run' ? 220 : 120), 0.4, 1.8);
   }
   b.mixer.update(dt);
   const dy = b.aimYaw - b.realYaw, look = -(b.pitch || 0);   // shown pitch: up is +; rotating about +X by a NEGATIVE angle lifts +Z

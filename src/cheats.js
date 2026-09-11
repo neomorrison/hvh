@@ -129,7 +129,7 @@ function tabs() {
         sw("Fake duck", () => c.antiaim.fakeduck, v => c.antiaim.fakeduck = v, null, true),
         keybind("Fake duck key", () => c.antiaim.fakeduckKey || "KeyX", v => c.antiaim.fakeduckKey = v, true),
         sel("Fake duck mode", ["hold", "toggle"], () => c.antiaim.fakeduckMode || "hold", v => c.antiaim.fakeduckMode = v, true),
-        sw("Moonwalk (legs animate backwards while you move)", () => !!c.antiaim.moonwalk, v => c.antiaim.moonwalk = v),
+        sw("Moonwalk (no walk/run animation — the body glides)", () => !!c.antiaim.moonwalk, v => c.antiaim.moonwalk = v),
         note(`The desync angle is the fake body's offset made geometry — 0° really is no fake at all now, and 58° swings ` +
              `it about a body's width off you. <b>freestanding</b> looks at the map and puts the fake where the nearest ` +
              `enemy can see it, leaving the real you behind the corner, so an un-resolved shot goes into the wall. ` +

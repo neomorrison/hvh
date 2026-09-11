@@ -35,6 +35,9 @@ export function loadSourceMap(glbBuffer, spawns, texturedScene, nav) {
     texturedScene.traverse(o => {
       if (!o.isMesh) return;
       o.castShadow = false; o.receiveShadow = true; if (o.material) o.material.side = THREE.DoubleSide;   // map is pre-lit + static → only agents cast dynamic shadows (cheap shadow pass)
+      // the BSP's baked light arrives as vertex colour in 0.1–0.6 — far too dim under any fill; lift it (once)
+      const col = o.geometry && o.geometry.attributes && o.geometry.attributes.color;
+      if (col && !o.geometry.userData.lifted) { const arr = col.array; for (let i = 0; i < arr.length; i++) arr[i] = Math.min(1.6, arr[i] * 2.2 + 0.12); col.needsUpdate = true; o.geometry.userData.lifted = true; }
       if (/rolling_gate/i.test(o.name || '')) o.visible = false;   // CT-spawn garage is walk-through now → hide its door so it reads as open
     });
     addMapObject(texturedScene);
@@ -146,8 +149,8 @@ function makeDetailTexture() {
 function setupSky(b) {
   scene.background = new THREE.Color(0x88b6e8);
   scene.fog = new THREE.Fog(0xcadcef, 4500, 17000);                 // distant haze; the sky dome stays visible
-  addMapObject(new THREE.HemisphereLight(0xdcecff, 0x8a8474, 0.6));  // sky + warm ground bounce (core.js adds another hemi)
-  addMapObject(new THREE.AmbientLight(0xa8bcd0, 0.35));            // uniform fill so interior ceilings aren't black
+  addMapObject(new THREE.HemisphereLight(0xdcecff, 0x8a8474, 1.1));  // sky + warm ground bounce (core.js adds another hemi)
+  addMapObject(new THREE.AmbientLight(0xc4d4e6, 0.95));            // strong uniform fill: the BSP faces carry their own baked light as vertex colour, which reads dark under weak fill
   sun.color.setHex(0xfff6e6); sun.intensity = 1.45;                // bright daylight key light
 
   // day sky dome (inverted sphere): deep blue zenith -> pale horizon. Guarded for the headless stub.
