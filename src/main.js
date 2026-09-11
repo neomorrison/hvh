@@ -190,7 +190,13 @@ function humanMove(dt) {
     const w = WEAPONS[human.cur];
     // don't keep planting between shots on a slow non-auto (SSG/scout bolt cycle) — only stop when actually able to fire now
     const fireReady = human.fireCd <= 0 || (w && w.auto);
-    if (fireReady) human.speedScale = autoStopScale(human, false);
+    // LIMBO BREAKER (what real cheats do): if auto-stop has held you slow for 0.7s and no shot has gone
+    // out, the shot is not coming — release for 0.4s and keep moving instead of standing planted
+    human._asRelease = Math.max(0, (human._asRelease || 0) - dt);
+    if (fireReady && human._asRelease <= 0) human.speedScale = autoStopScale(human, false);
+    const shotRecently = performance.now() - (human.lastShot || 0) < 300;
+    if (human.speedScale < 0.6 && !shotRecently) { human._asHold = (human._asHold || 0) + dt; if (human._asHold > 0.7) { human._asHold = 0; human._asRelease = 0.4; human.speedScale = 1; } }
+    else human._asHold = 0;
   }
   moveAgent(human, dir, dt, false);
 }

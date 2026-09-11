@@ -635,8 +635,11 @@ export function autoStopScale(a, combat, keepClosing) {
   if (a.reloadT > 0 || !wp || (wp.ammo || 0) <= 0) return 1;
   const cs = canShoot(a);
   if (!cs.have || !cs.tgt) return 1;                               // nothing worth slowing down for
-  const need = THREE.MathUtils.clamp(aimCfg(a).hitchance / 100, 0, 1);
-  if (need <= 0) return 1;
+  // solve for the gate plus a hair of margin: the estimate is re-sampled after the slow-down with the
+  // target and the bloom slightly moved, and landing exactly ON the threshold is what produced the
+  // "planted, not shooting" limbo — the shot must clear the gate, not touch it
+  const need = THREE.MathUtils.clamp(aimCfg(a).hitchance / 100 + 0.02, 0, 0.97);
+  if (need <= 0.02) return 1;
   const vx = a.vel.x, vz = a.vel.z, full = baseMoveSpeed(a, combat);
   const accAt = sc => { a.vel.x = full * sc; a.vel.z = 0; const acc = computeAccuracy(a, cs.aimPoint, cs.body, cs.group, cs.exposure); a.vel.x = vx; a.vel.z = vz; return acc; };
   if (accAt(1) >= need) return 1;                                  // already accurate enough at full speed
