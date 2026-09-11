@@ -8,7 +8,7 @@ import { agents, refs, GAME, vm, clock, keys, input } from './state.js';
 import { WALLS, NODES, EDGES, segAABB, losClear, penetrate, clearWorld } from './world.js';
 import { updateEffects, nadeProjectiles, shotLines } from './effects.js';
 import { setViewmodel, updateAgentVisual, updateBacktrackGhosts, hitboxCenter, eyePos, updateViewmodel } from './agents.js';
-import { manualFire, aimbotFire, canShoot, fireWeaponCommon, fireDoubleTap, meleeAttack, moveAgent, computeBloom, startReload, finishReload, switchTo, selectBest, visibleTo, autoStopScale, baseMoveSpeed, recordTick, updateTickbase, beginSimFrame, applyFakeDuck } from './combat.js';
+import { manualFire, aimbotFire, canShoot, fireWeaponCommon, fireDoubleTap, meleeAttack, moveAgent, computeBloom, startReload, finishReload, switchTo, selectBest, visibleTo, autoStopScale, autoStopNow, baseMoveSpeed, recordTick, updateTickbase, beginSimFrame, applyFakeDuck } from './combat.js';
 import { botThink } from './ai.js';
 import { verifyCheats } from './selftest.js';
 import {
@@ -194,11 +194,9 @@ function humanMove(dt) {
     const fireReady = human.fireCd <= 0;
     // LIMBO BREAKER (what real cheats do): if auto-stop has held you slow for 0.7s and no shot has gone
     // out, the shot is not coming — release for 0.4s and keep moving instead of standing planted
-    human._asRelease = Math.max(0, (human._asRelease || 0) - dt);
-    if (fireReady && human._asRelease <= 0) human.speedScale = autoStopScale(human, false);
-    const shotRecently = performance.now() - (human.lastShot || 0) < 300;
-    if (human.speedScale < 0.6 && !shotRecently) { human._asHold = (human._asHold || 0) + dt; if (human._asHold > 0.7) { human._asHold = 0; human._asRelease = 0.4; human.speedScale = 1; } }
-    else human._asHold = 0;
+    // ...and only for a round that is actually going out: the aimbot's own (auto shoot) or yours (mouse
+    // held). A quick-stop in that frame, full speed in every other — see autoStopNow().
+    if (fireReady && (c.aimbot.autoShoot || input.mouseDown) && autoStopNow(human)) human.speedScale = 0;
   }
   moveAgent(human, dir, dt, false);
 }
@@ -375,6 +373,7 @@ function updateCamera() {
   const human = refs.human;
   if (human.alive) {
     vm._specKey = null;   // alive: viewmodel belongs to us again — force a re-sync the next time we spectate
+    if (GAME.practice) spec.free = false;   // (the range's death cam is a free cam; back in your body it stops)
     setListener(human.pos.x, human.eye, human.pos.z, human.yaw, human);
     const scopedNow = human.scoped && WEAPONS[human.cur] && WEAPONS[human.cur].scope;
     const tp = GAME.thirdPerson;
@@ -405,6 +404,9 @@ function updateCamera() {
   } else {
     if (vm.current) vm.current.visible = false;
     if (Math.abs(camera.fov - 74) > 0.5) { camera.fov = 74; camera.updateProjectionMatrix(); }
+    // the range has no one worth spectating: die and the camera stays where you fell (free cam), so the
+    // bot that killed you is still a visible bot, not a pair of eyes you are looking out of
+    if (GAME.practice && !spec.free) { spec.free = true; spec.pos.copy(camera.position); spec.yaw = human.yaw; spec.pitch = human.pitch; }
     if (spec.free) {                                          // free-fly spectator
       setListener(spec.pos.x, spec.pos.y, spec.pos.z, spec.yaw, null);
       camera.position.copy(spec.pos); camera.rotation.set(spec.pitch, spec.yaw, 0, 'YXZ');
@@ -437,7 +439,7 @@ function assignHumanTeam() { const pick = GAME.humanTeamPick; const ct = pick ==
 // cheats only exist once the cheat is "injected" from the main menu; otherwise you play legit
 function applyCheatState() { if (GAME.injected) { if (!loadConfig()) refs.human.cheats = optimizedCheats(); } else refs.human.cheats = defaultCheats(false); buildCheatMenu(); }   // injected + nothing saved → the optimized default
 function deploy() {
-  $("#startPanel").classList.remove("show");
+  $("#startPanel").classList.remove("show"); document.body.classList.remove("menu");
   GAME.customMap = null; GAME.sourceMap = null;
   GAME.phase = "idle";
   buildDefaultMap();
@@ -451,7 +453,7 @@ function deploy() {
 }
 
 function deploySource(glb, spawns, texturedScene, nav) {
-  $("#startPanel").classList.remove("show");
+  $("#startPanel").classList.remove("show"); document.body.classList.remove("menu");
   GAME.customMap = null; GAME.sourceMap = spawns.name || "imported"; GAME.phase = "idle";
   const info = loadSourceMap(glb, spawns, texturedScene, nav);
   loadPatches(GAME.sourceMap, texturedScene);   // re-apply saved map patches (collision + hidden surfaces)
@@ -464,7 +466,7 @@ function deploySource(glb, spawns, texturedScene, nav) {
 }
 /* aim_practice: the config range (see practice.js) — no rounds, unarmed targets, one armed guard */
 function deployPractice() {
-  $("#startPanel").classList.remove("show");
+  $("#startPanel").classList.remove("show"); document.body.classList.remove("menu");
   buildPracticeMap();
   GAME.customMap = null; GAME.sourceMap = "aim_practice"; GAME.phase = "idle"; GAME.practice = true;
   GAME.round = 1; GAME.half = 1; GAME.scoreCT = 0; GAME.scoreT = 0; GAME.lossStreak = { CT: 0, T: 0 };

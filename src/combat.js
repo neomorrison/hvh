@@ -695,6 +695,28 @@ export function autoStopScale(a, combat, keepClosing) {
   return lo;
 }
 
+/* AUTO STOP THE WAY THE REAL CHEATS DO IT: a quick-stop in the ONE frame a round leaves, and only when
+   that stop buys the shot — planted accuracy clears min hit chance and moving accuracy does not. If you
+   are already accurate enough on the move, nothing happens; if planting would not help, nothing
+   happens; between shots (cooldown) nothing happens. No "slow to the speed that meets the number",
+   which felt like wading through mud: velocity goes to zero for the shot and comes straight back. */
+export function autoStopNow(a) {
+  const w = WEAPONS[a.cur];
+  if (!w || w.melee) return false;
+  const wp = a.weapons[a.cur];
+  if (a.reloadT > 0 || !wp || (wp.ammo || 0) <= 0) return false;
+  const cs = canShoot(a);
+  if (!cs.have || !cs.tgt) return false;
+  const need = THREE.MathUtils.clamp(aimCfg(a).hitchance / 100 + 0.02, 0, 0.97);
+  if (need <= 0.02) return false;
+  const moving = computeAccuracy(a, cs.aimPoint, cs.body, cs.group, cs.exposure);
+  if (moving >= need) return false;                                // the shot is there on the move
+  const vx = a.vel.x, vz = a.vel.z; a.vel.x = 0; a.vel.z = 0;
+  const planted = computeAccuracy(a, cs.aimPoint, cs.body, cs.group, cs.exposure);
+  a.vel.x = vx; a.vel.z = vz;
+  return planted >= need;                                          // stopping makes the shot → stop for it
+}
+
 export function applyHit(shooter, target, group, dist, throughWall) {
   if (!target.alive) return;
   const wkey = shooter.cur;

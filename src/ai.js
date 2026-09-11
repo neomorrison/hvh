@@ -6,7 +6,7 @@ import { WEAPONS, TEAM, JUMP_VEL } from './data.js';
 import { NODES, EDGES, RESCUE_ZONES, MAP_BOUNDS, CT_SPAWNS, T_SPAWNS, astar, nearestNode, losClear } from './world.js';
 import { hitboxCenter, eyePos } from './agents.js';
 import { agents, GAME, clock } from './state.js';
-import { aimbotFire, moveAgent, meleeAttack, visibleTo, startReload, giveWeapon, hasAnyAmmo, autoStopScale, applyFakeDuck, baseMoveSpeed } from './combat.js';
+import { aimbotFire, moveAgent, meleeAttack, visibleTo, startReload, giveWeapon, hasAnyAmmo, autoStopScale, autoStopNow, applyFakeDuck, baseMoveSpeed } from './combat.js';
 import { liveHostages, armorBuy } from './game.js';
 
 export function botBuy(a) {
@@ -225,7 +225,9 @@ export function botThink(a, dt) {
       // Bots always pass keepClosing: planting only pays when planting actually buys the shot. Rooted on
       // a shot that a dead stop still can't make, a bot stands there forever — it can never improve,
       // because standing still was already its best option. Closing the gap can.
-      a.speedScale = a.cheats.aimbot.autoStop ? autoStopScale(a, true, true) : ((bestd > 360) ? 1 : 0.28);
+      // bots quick-stop the same way the player does: dead still in the frame a round leaves when that
+      // is what makes the shot, otherwise they keep strafing (see autoStopNow)
+      a.speedScale = (a.cheats.aimbot.autoStop && a.fireCd <= 0 && autoStopNow(a)) ? 0 : ((bestd > 360) ? 1 : 0.28);
       botMove(a, desired, dt, true);
       aimbotFire(a);
     }

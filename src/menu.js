@@ -85,7 +85,9 @@ export function initMenu(handlers) {
   for (const card of document.querySelectorAll('.mapcard')) card.onclick = () => { MENU.map = card.dataset.map; for (const c of document.querySelectorAll('.mapcard')) c.classList.toggle('on', c === card); };
   const bots = $('#botsRange'), botsOut = $('#botsOut'); const syncBots = () => { MENU.bots = +bots.value; botsOut.textContent = MENU.bots + ' v ' + MENU.bots; }; bots.oninput = syncBots; syncBots();
   for (const r of document.querySelectorAll('input[name=side]')) r.onchange = () => { MENU.team = r.value; };
-  $('#playBtn').onclick = () => { if ($('#playBtn').disabled) return; document.body.classList.remove('menu'); onDeploy({ map: MENU.map, bots: MENU.bots, team: MENU.team, injected: MENU.injected }); };
+  // the start panel goes away THIS frame: the map load behind DEPLOY is async, and while it ran the menu
+  // renderer kept re-adding the body class that hides the match HUD — which is how the HUD vanished
+  $('#playBtn').onclick = () => { if ($('#playBtn').disabled) return; $('#startPanel').classList.remove('show'); document.body.classList.remove('menu'); onDeploy({ map: MENU.map, bots: MENU.bots, team: MENU.team, injected: MENU.injected }); };
   setView('home');
 }
 export function menuReady() { const b = $('#playBtn'); if (b) { b.disabled = false; b.textContent = 'DEPLOY'; } const ls = $('#loadStat'); if (ls) ls.textContent = ''; }

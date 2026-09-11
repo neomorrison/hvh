@@ -15,9 +15,11 @@ const quad = (p0, p1, p2, p3) => { tri(p0, p1, p2); tri(p0, p2, p3); };
 function box(x0, x1, y0, y1, z0, z1) {
   const v000 = [x0, y0, z0], v100 = [x1, y0, z0], v110 = [x1, y1, z0], v010 = [x0, y1, z0];
   const v001 = [x0, y0, z1], v101 = [x1, y0, z1], v111 = [x1, y1, z1], v011 = [x0, y1, z1];
-  quad(v000, v100, v110, v010); quad(v001, v101, v111, v011);   // z faces
-  quad(v000, v010, v011, v001); quad(v100, v110, v111, v101);   // x faces
-  quad(v000, v100, v101, v001); quad(v010, v110, v111, v011);   // y faces
+  // wound OUTWARD like the real hull (penetration reads a face's normal to know whether a round is
+  // entering or leaving solid)
+  quad(v000, v010, v110, v100); quad(v001, v101, v111, v011);   // -z, +z
+  quad(v000, v001, v011, v010); quad(v100, v110, v111, v101);   // -x, +x
+  quad(v000, v100, v101, v001); quad(v010, v011, v111, v110);   // -y, +y
 }
 quad([-1000, 0, -1000], [1000, 0, -1000], [1000, 0, 1000], [-1000, 0, 1000]); // floor (y=0)
 box(-10, 10, 0, 200, -500, 500);   // thin interior wall across z, separating x<-10 from x>10
