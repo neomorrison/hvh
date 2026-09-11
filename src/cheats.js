@@ -69,8 +69,8 @@ function tabs() {
       { title: "Resolver", rows: [
         sw("Resolver enabled", () => c.resolver.on, v => c.resolver.on = v),
         sel("Mode", ["animation", "brute", "onshot"], () => c.resolver.mode || "animation", v => c.resolver.mode = v, true),
-        rng("Strength", 0, 100, () => Math.round((c.resolver.strength != null ? c.resolver.strength : 0.6) * 100), v => c.resolver.strength = v / 100, v => v + "%", true),
-        rng("Shot memory", 0, 150, () => Math.round((c.resolver.memory != null ? c.resolver.memory : 0.55) * 100), v => c.resolver.memory = v / 100, v => (v / 100).toFixed(2) + "s", true),
+        rng("Strength", 0, 100, () => Math.round((c.resolver.strength != null ? c.resolver.strength : 0.8) * 100), v => c.resolver.strength = v / 100, v => v + "%", true),
+        rng("Shot memory", 0, 150, () => Math.round((c.resolver.memory != null ? c.resolver.memory : 1.0) * 100), v => c.resolver.memory = v / 100, v => (v / 100).toFixed(2) + "s", true),
         note(`Strength is a <b>ceiling, not an answer</b>. An enemy who fires without hiding the shot pins their real ` +
              `angles and hands you the read for <b>shot memory</b> seconds — until their desync side re-rolls. With no ` +
              `read the resolver guesses, and their anti-aim cuts the guess down. ` +

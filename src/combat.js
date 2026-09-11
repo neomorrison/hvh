@@ -361,17 +361,19 @@ export function resolveDesync(shooter, target) {
   if (!target._desyncOff) return true;                         // no fake up — nothing to resolve
   const R = shooter.cheats.resolver || {};
   if (!R.on) return false;                                     // resolver off → the desync always wins
-  const strength = R.strength != null ? R.strength : 0.6;
+  const strength = R.strength != null ? R.strength : 0.8;
   const mode = R.mode || "animation";
   const fresh = target._lastExpose != null
-    && (clock.t - target._lastExpose) < (R.memory != null ? R.memory : 0.55)
+    && (clock.t - target._lastExpose) < (R.memory != null ? R.memory : 1.0)
     && target._lastExpose >= (target._sideStamp || 0);         // the side hasn't re-rolled since the read
   const b = mode === "brute" ? bruteRead(shooter, target) : null;
   let p;
   if (fresh) p = strength + (1 - strength) * (mode === "onshot" ? 0.85 : 0.75);
   else {
-    p = strength * (1 - aaQuality(target));
-    if (mode === "brute") p = Math.min(0.9, p * 0.85 + b.n * 0.09);   // starts worse, converges
+    // the anti-aim degrades the guess, but a resolver still has the animation layers, the eye
+    // angles and the last known real yaw to work from — it is never reduced to a coin flip
+    p = strength * (1 - aaQuality(target) * 0.6);
+    if (mode === "brute") p = Math.min(0.95, p * 0.85 + b.n * 0.12);   // starts worse, converges faster
     else if (mode === "onshot") p *= 0.5;                             // blind between exposures
   }
   const ok = Math.random() < p;
@@ -544,6 +546,12 @@ function selectShot(a) {
   // hitboxes is a shot at where nobody is, which is what the old signature quietly asked for.
   const accOf = (x, body) => (x.group ? computeAccuracy(a, x.aimPoint, body, x.group, x.exposure) : 0);
   let best = evalShot(a, tgt, tgt, order, cb, cfg), bestBody = tgt, bestAcc = accOf(best, tgt), bestAge = 0, bestRec = null;
+  // FORCE BAIM: the pelvis is the box a desync moves least, the chest is the bigger one — take whichever
+  // this cone actually lands on more, so body aim is the MORE accurate choice it is meant to be
+  if (cb.aimbot.forceBody && best.group === "stomach") {
+    const alt = evalShot(a, tgt, tgt, ["chest"], cb, cfg);
+    if (alt.group) { const acc = accOf(alt, tgt); if (acc > bestAcc) { best = alt; bestAcc = acc; } }
+  }
   // BACKTRACK — only when the live shot isn't already good enough. A peeker who is behind cover NOW
   // was standing in the open a few ticks ago; the server still accepts a hit on that tick.
   // ...but only when rewinding can actually change the answer: the live shot has to be failing AND the
@@ -774,7 +782,11 @@ export function aimbotFire(a) {
       const off = cs.tgt._desyncOff, swing = DESYNC_SWING[cs.group] != null ? DESYNC_SWING[cs.group] : 1;
       // the sideways fake is a rotation, so it scales with the lever; a fake DUCK is a real vertical
       // shift of the whole body, so that part is off by its full amount whichever box you picked
-      aimAt = cs.aimPoint.clone(); aimAt.x += off.x * swing; aimAt.z += off.z * swing; aimAt.y += off.y;
+      // ...except that a fake duck is read from the animation (the legs fold, the eye drops) far more
+      // reliably than a yaw is — an enabled resolver almost always gets the HEIGHT right even when it
+      // loses the side, so the vertical miss only happens on the rare double loss
+      const duckSeen = (a.cheats.resolver && a.cheats.resolver.on) ? Math.random() < 0.85 : false;
+      aimAt = cs.aimPoint.clone(); aimAt.x += off.x * swing; aimAt.z += off.z * swing; if (!duckSeen) aimAt.y += off.y;
       lostRead = true;
     }
     const dirAim = aimAt === cs.aimPoint ? dirTo : aimAt.clone().sub(me).normalize();

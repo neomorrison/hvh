@@ -122,7 +122,7 @@ export function defaultCheats(aggressive) {
     autowall: { on: aggressive, minDmg: 30 },
     // strength is the resolver's ceiling, not its answer — see resolveDesync(): a target's anti-aim
     // cuts it, and only an enemy who fires without hiding the shot gives a read worth `memory` seconds.
-    resolver: { on: aggressive, mode: "animation", strength: 0.6, memory: 0.55 },
+    resolver: { on: aggressive, mode: "animation", strength: 0.8, memory: 1.0 },
     // fake duck is a BIND, not a state: enabling it here only arms it, and it engages while the key is
     // held (or between presses in toggle mode). It forces a real crouch, so leaving it permanently on
     // would leave you walking at a third speed with no way to stand up.

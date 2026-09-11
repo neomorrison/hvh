@@ -8,7 +8,7 @@ import { agents, refs, GAME, vm, clock, keys, input } from './state.js';
 import { WALLS, NODES, EDGES, segAABB, losClear, penetrate } from './world.js';
 import { updateEffects, nadeProjectiles, shotLines } from './effects.js';
 import { setViewmodel, updateAgentVisual, updateBacktrackGhosts, hitboxCenter, eyePos } from './agents.js';
-import { manualFire, aimbotFire, fireWeaponCommon, fireDoubleTap, meleeAttack, moveAgent, computeBloom, startReload, finishReload, switchTo, selectBest, visibleTo, autoStopScale, baseMoveSpeed, recordTick, updateTickbase, beginSimFrame, applyFakeDuck } from './combat.js';
+import { manualFire, aimbotFire, canShoot, fireWeaponCommon, fireDoubleTap, meleeAttack, moveAgent, computeBloom, startReload, finishReload, switchTo, selectBest, visibleTo, autoStopScale, baseMoveSpeed, recordTick, updateTickbase, beginSimFrame, applyFakeDuck } from './combat.js';
 import { botThink } from './ai.js';
 import { verifyCheats } from './selftest.js';
 import {
@@ -258,6 +258,11 @@ function humanShoot(dt) {
   if (c.aimbot.on && (md || c.aimbot.autoShoot)) {
     if (wp.ammo <= 0) { startReload(human); return; }
     if (aimbotFire(human)) { updateHUDWeapons(); return; }
+    // A target is up but the shot does not qualify yet (hit chance / min damage / resolver-safe box):
+    // HOLD. This used to fall through to a bloom-rolled manual shot at the crosshair, which is what
+    // made "force baim" look ignored (the manual round hit whatever box the crosshair was on) and
+    // what most of the "body misses" were — rounds the aimbot never approved.
+    if (canShoot(human).have) return;
   }
   const r8fan = human.cur === "r8" && rmb;
   const glockBurst = human.cur === "glock" && human.glockBurst;
