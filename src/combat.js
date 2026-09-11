@@ -359,11 +359,19 @@ function bruteRead(shooter, target) {
    (which is what the first cut of this did) made desync miss bodies constantly, which is not HvH. */
 export const DESYNC_SWING = { head: 1, chest: 0.35, stomach: 0.22, legs: 0.1 };
 
+/* Per frame, for the target the aimbot has chosen: how long it has been in view standing still. A
+   still target's animation layers and fixed eye position give its real yaw away; moving resets it. */
+function watchTarget(shooter, target) {
+  const w = shooter._watch || (shooter._watch = new Map()); let ww = w.get(target);
+  if (!ww || clock.t - ww.t > 1.5) ww = { t: clock.t, s: 0 };
+  const dt = Math.min(0.1, Math.max(0, clock.t - ww.t)), still = Math.hypot(target.vel.x, target.vel.z) < 5;
+  ww.s = still ? Math.min(2, ww.s + dt) : Math.max(0, ww.s - dt * 2); ww.t = clock.t; w.set(target, ww);
+}
 export function resolveDesync(shooter, target) {
   if (!target._desyncOff) return true;                         // no fake up — nothing to resolve
   const R = shooter.cheats.resolver || {};
   if (!R.on) return false;                                     // resolver off → the desync always wins
-  const strength = R.strength != null ? R.strength : 0.8;
+  const strength = R.strength != null ? R.strength : 0.9;
   const mode = R.mode || "animation";
   const fresh = target._lastExpose != null
     && (clock.t - target._lastExpose) < (R.memory != null ? R.memory : 1.0)
@@ -374,13 +382,12 @@ export function resolveDesync(shooter, target) {
   else {
     // the anti-aim degrades the guess, but a resolver still has the animation layers, the eye
     // angles and the last known real yaw to work from — it is never reduced to a coin flip
-    p = strength * (1 - aaQuality(target) * 0.5);
+    p = strength * (1 - aaQuality(target) * 0.45);
     // a target that is standing still is the easiest read there is (animation layers + a fixed eye
-    // position give the real yaw away): every second you keep it in view adds to the read, up to +0.25
-    const w = shooter._watch || (shooter._watch = new Map()); let ww = w.get(target);
-    const still = Math.hypot(target.vel.x, target.vel.z) < 5;
-    if (!ww || clock.t - ww.t > 1.5) ww = { t: clock.t, s: 0 }; ww.s = still ? Math.min(2, ww.s + (clock.t - ww.t)) : Math.max(0, ww.s - (clock.t - ww.t)); ww.t = clock.t; w.set(target, ww);
-    p = Math.min(0.96, p + 0.25 * (ww.s / 2));
+    // position give the real yaw away): every second it stays in view (watchTarget, per frame) adds
+    // to the read, up to +0.25
+    const ww = shooter._watch && shooter._watch.get(target);
+    if (ww) p = Math.min(0.96, p + 0.25 * (ww.s / 2));
     if (mode === "brute") p = Math.min(0.96, p * 0.85 + b.n * 0.12);   // starts worse, converges faster
     else if (mode === "onshot") p *= 0.5;                             // blind between exposures
   }
@@ -610,6 +617,7 @@ export function canShoot(a) {
   if (a._csFrame !== _simFrame || !res || (res.tgt && !res.tgt.alive)) { res = selectShot(a); a._cs = res; a._csFrame = _simFrame; }
   res.hitChance = 0; res.ok = false;
   if (!res.have) return res;
+  watchTarget(a, res.tgt);   // the resolver's "how long have I had this one in view" read (see resolveDesync)
   res.hitChance = computeAccuracy(a, res.aimPoint, res.body, res.group, res.exposure);
   const w = WEAPONS[a.cur];
   const firable = !!w && !w.melee && a.reloadT <= 0 && (a.weapons[a.cur]?.ammo || 0) > 0;
@@ -767,6 +775,11 @@ export function manualFire(a) {
    canShoot(), so the two features engage under exactly the same conditions. */
 export function aimbotFire(a) {
   const cb = a.cheats;
+  // ALWAYS solve the shot against the world as it is NOW. The per-step memo is for auto-stop (which asks
+  // the same question at different speeds); by the time the trigger is pulled every bot has thought,
+  // moved and maybe changed stance since that memo, and a round fired at a stale solution against the
+  // current hitboxes is exactly the "missed — inaccuracy" you get at 100% hit chance.
+  a._csFrame = -1;
   const cs = canShoot(a);
   if (!cs.have) return false;                                // no min-damage hitbox to aim at
   const me = eyePos(a);

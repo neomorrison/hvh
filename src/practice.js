@@ -101,14 +101,19 @@ export function practiceThink(a, dt) {
   a.yaw += d * Math.min(1, dt * (a.practiceFighter ? 12 : 3)); a.realYaw = a.yaw;
   a.pitch = 0; a.vel.set(0, 0, 0); a.speedScale = 1;
   if (a.practiceAA) { a._fdActive = Math.floor(performance.now() / 1500) % 2 === 0; a.crouch = false; applyFakeDuck(a); }   // fake duck on for 1.5s, off for 1.5s (really ducks, like a bind)
-  if (a.practiceFighter && h.alive && GAME.phase === "live" && roomOf(h.pos) === 'fight') aimbotFire(a);
+  if (a._grace > 0) a._grace -= dt;   // half a second of not firing after a respawn (yours or its own), so the duel restarts fair
+  if (a.practiceFighter && h.alive && GAME.phase === "live" && roomOf(h.pos) === 'fight' && !(a._grace > 0)) aimbotFire(a);
 }
 export function updatePractice(dt) {
   if (!GAME.practice) return;
   const h = refs.human; if (!h) return;
   const active = roomOf(h.pos); if (h.alive) h._room = active;
+  // the moment you die in the duel room the fighter goes back to its post (it can't wander off while
+  // you are dead) and holds fire for half a second once you are back
+  if (!h.alive && !h._wasDead) { for (const a of agents) if (a.practiceFighter) { respawn(a, PRACTICE.fight); a._grace = 0.5; } }
+  h._wasDead = !h.alive;
   for (const a of agents) {
-    if (a.isHuman) { if (!a.alive) { a._respawn = (a._respawn || 0) + dt; if (a._respawn > 2) { a._respawn = 0; respawn(a, ROOMS[a._room || 'main'].spawn); a.money = 16000; } } continue; }
+    if (a.isHuman) { if (!a.alive) { a._respawn = (a._respawn || 0) + dt; if (a._respawn > 2) { a._respawn = 0; respawn(a, ROOMS[a._room || 'main'].spawn); a.money = 16000; for (const b of agents) if (b.practiceFighter) b._grace = 0.5; } } continue; }
     if (a.room !== active) { if (a.alive) { a.alive = false; a.body.g.visible = false; } a._respawn = 0; continue; }   // other rooms stay empty
     if (!a.alive) { a._respawn = (a._respawn || 0) + dt; if (a._respawn > 1.2) { a._respawn = 0; respawn(a, practiceSpawnOf(a)); } }
   }
@@ -118,6 +123,6 @@ export function updatePractice(dt) {
 function respawn(a, s) {
   a.alive = true; a.hp = 100; a.pos.copy(s); a.pos.y = s.y || 0; a.vel.set(0, 0, 0); a.eye = 64 + a.pos.y;
   a.yaw = s.yaw != null ? s.yaw : a.yaw; a.realYaw = a.yaw; a.pitch = 0; a.crouch = false; a.reloadT = 0; a.fireCd = 0; a.flashT = 0; a.hitFlash = 0; a.body.g.visible = true;
-  if (!a.isHuman) practiceArm(a);
+  if (!a.isHuman) { practiceArm(a); a._grace = 0.5; }
   else if (!a.cur || !a.weapons[a.cur]) { giveWeapon(a, "usp"); a.cur = "usp"; }
 }

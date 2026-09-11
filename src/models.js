@@ -141,7 +141,10 @@ export function updateBodyGLB(a, dt) {
 export function buildWeaponModelGLB(key) {
   if (!MODELS.weapons) return null;
   const src = MODELS.weapons.getObjectByName(key); if (!src) return null;
-  const g = src.clone(true); g.position.set(0, 0, 0); g.rotation.set(0, 0, 0); g.visible = true;
+  const g = src.clone(true); g.position.set(0, 0, 0); g.visible = true;   // (roots are baked to identity in Blender — never reset a rotation here)
+  // clone() shares materials with the library model — and with every other instance, so an enemy's
+  // chams would recolour YOUR viewmodel. One material set per instance.
+  g.traverse(o => { if (!o.isMesh) return; o.material = Array.isArray(o.material) ? o.material.map(m => m.clone()) : o.material.clone(); });
   const hammer = g.getObjectByName('Hammer'); if (hammer) g.userData.hammer = hammer;
   return g;
 }
@@ -150,5 +153,7 @@ export function buildWeaponModelGLB(key) {
 export function nadeMeshGLB(kind) {
   if (!MODELS.nades) return null;
   const src = MODELS.nades.getObjectByName(kind) || MODELS.nades.getObjectByName(kind === 'inc' ? 'molly' : kind); if (!src) return null;
-  const g = src.clone(true); g.position.set(0, 0, 0); g.rotation.set(0, 0, 0); g.visible = true; return g;
+  const g = src.clone(true); g.position.set(0, 0, 0); g.visible = true;
+  g.traverse(o => { if (!o.isMesh) return; o.material = Array.isArray(o.material) ? o.material.map(m => m.clone()) : o.material.clone(); });   // own materials (see buildWeaponModelGLB)
+  return g;
 }

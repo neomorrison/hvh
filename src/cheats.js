@@ -66,7 +66,7 @@ export function optimizedCheats() {
                deagle: { hitchance: 60, minDmg: 30, priority: "head" }, r8: { hitchance: 70, minDmg: 50, priority: "head" },
                glock: { hitchance: 45, minDmg: 12, priority: "chest" }, usp: { hitchance: 45, minDmg: 12, priority: "chest" }, duals: { hitchance: 40, minDmg: 12, priority: "chest" } } });
   Object.assign(c.autowall, { on: true, minDmg: 25 });
-  Object.assign(c.resolver, { on: true, mode: "brute", strength: 0.8, memory: 1.0 });
+  Object.assign(c.resolver, { on: true, mode: "brute", strength: 0.9, memory: 1.0 });
   Object.assign(c.antiaim, { on: true, yaw: "jitter", jitter: 58, pitch: "down", desync: true, desyncAngle: 58, mode: "freestanding", fakeduck: true, fakeduckMode: "hold" });
   Object.assign(c.tickbase, { backtrack: MAX_BACKTRACK_TICKS, hideShots: true, doubleTap: true });
   Object.assign(c.visuals, { esp: true, boxes: true, health: true, name: true, chams: true, hitchance: true, backtrackGhost: true });
@@ -105,7 +105,7 @@ function tabs() {
       { title: "Resolver", rows: [
         sw("Resolver enabled", () => c.resolver.on, v => c.resolver.on = v),
         sel("Mode", ["animation", "brute", "onshot"], () => c.resolver.mode || "animation", v => c.resolver.mode = v, true),
-        rng("Strength", 0, 100, () => Math.round((c.resolver.strength != null ? c.resolver.strength : 0.8) * 100), v => c.resolver.strength = v / 100, v => v + "%", true),
+        rng("Strength", 0, 100, () => Math.round((c.resolver.strength != null ? c.resolver.strength : 0.9) * 100), v => c.resolver.strength = v / 100, v => v + "%", true),
         rng("Shot memory", 0, 150, () => Math.round((c.resolver.memory != null ? c.resolver.memory : 1.0) * 100), v => c.resolver.memory = v / 100, v => (v / 100).toFixed(2) + "s", true),
         note(`Strength is a <b>ceiling, not an answer</b>. An enemy who fires without hiding the shot pins their real ` +
              `angles and hands you the read for <b>shot memory</b> seconds — until their desync side re-rolls. With no ` +

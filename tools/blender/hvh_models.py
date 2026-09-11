@@ -232,7 +232,13 @@ def build_weapons():
     def B(n, s, l, m, bev=0.4): return box(n, (s[0], s[2], s[1]), (l[0], -l[2], l[1]), m, bevel=bev)   # (x, y_up, z_fwd) -> blender, size AND position
     def C(n, r, L, l, m):        return cyl(n, r, L, (l[0], -l[2], l[1]), m, axis='Y')
     def finish(name, parts):
-        r = join(parts, name); r.location = (0, 0, 0); roots.append(r); return r
+        r = join(parts, name); r.location = (0, 0, 0)
+        # join() keeps the ACTIVE part's object transform — a cylinder part carries a 90° rotation, and a
+        # rifle joined onto its barrel exported with that rotation on the root node (the loader then
+        # reset it and the rifle stood on end). Bake every root to identity.
+        bpy.ops.object.select_all(action='DESELECT'); r.select_set(True); bpy.context.view_layer.objects.active = r
+        bpy.ops.object.transform_apply(location=False, rotation=True, scale=True)
+        roots.append(r); return r
     def sights(y, z0, z1, h=1.2): return [B('rs', (2.4, h, 1), (0, y, z0), black, 0.15), B('fs', (0.8, h + 0.4, 1), (0, y, z1), black, 0.15)]
     def pistol(name, slide_len, slide_mat, barrel_r, barrel_len, extra=None):
         p = [B('grip', (3.6, 8, 4.6), (0, -5.5, -3.5), black, 0.5), B('frame', (4.2, 2.6, slide_len - 2), (0, -1.2, slide_len / 2 - 3.5), black, 0.3),

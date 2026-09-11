@@ -170,7 +170,7 @@ export function updateESP() {
 const RELOAD_C = 2 * Math.PI * 20;
 export function updateReloadRing() {
   const human = refs.human; const ring = document.getElementById('reloadRing');
-  if (human && human.alive && human.reloadT > 0 && human.reloadTotal > 0 && !GAME.thirdPerson) {
+  if (human && human.alive && human.reloadT > 0 && human.reloadTotal > 0) {   // in third person too — you still need to know when the mag is back
     ring.style.display = "block";
     const prog = 1 - (human.reloadT / human.reloadTotal);
     const fg = ring.querySelector('.fg'); fg.style.strokeDasharray = RELOAD_C; fg.style.strokeDashoffset = RELOAD_C * (1 - prog);
