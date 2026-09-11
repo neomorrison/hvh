@@ -106,6 +106,34 @@ export function setViewmodel(key, isNade) {
   const m = isNade ? buildNadeModel() : buildWeaponModel(key);
   m.scale.setScalar(0.45); m.position.set(7, -7, -20); m.rotation.set(0.04, Math.PI + 0.16, 0.04);
   camera.add(m); vm.current = m;
+  vm.base = { p: m.position.clone(), r: m.rotation.clone() }; vm.kick = 0; vm.swing = 0; vm.reload = 0; vm.reloadDur = 0; vm.isKnife = !!(WEAPONS[key] && WEAPONS[key].melee);
+}
+/* ---- viewmodel animation (procedural, no clips needed) ----
+   kick: the gun jumps back and up on every shot and settles; swing: the knife slashes across;
+   reload: the gun dips out of view, tilts, and comes back over the reload time. Third-person bodies get
+   the same kick on their gun pivot (body.kick, see updateBodyGLB). */
+export function vmKick(a, strength = 1) { if (a && a.body && a.body.glb) a.body.kick = Math.min(1, (a.body.kick || 0) + 0.6 * strength); if (a && a.isHuman) vm.kick = Math.min(1.5, (vm.kick || 0) + strength); }
+export function vmSwing(a, stab) { if (a && a.isHuman) { vm.swing = 1; vm.swingStab = !!stab; } }
+export function vmReload(a, dur) { if (a && a.isHuman) { vm.reload = 1; vm.reloadDur = Math.max(0.3, dur || 1); } }
+export function updateViewmodel() {
+  const now = performance.now(), dt = Math.min(0.05, (now - (vm._t || now)) / 1000); vm._t = now;
+  const m = vm.current; if (!m || !vm.base) return;
+  const b = vm.base; m.position.copy(b.p); m.rotation.copy(b.r);
+  if (vm.kick > 0) {                                      // recoil: back + up, fast in, exponential settle
+    const k = vm.kick; m.position.z += 2.2 * k; m.position.y += 0.6 * k; m.rotation.x += 0.09 * k; m.rotation.z += 0.02 * k;
+    vm.kick = Math.max(0, k - dt * 7);
+  }
+  if (vm.swing > 0) {                                     // knife: a slash sweeps right-to-left and down (stab: straight in)
+    const t = 1 - vm.swing, s = Math.sin(t * Math.PI);
+    if (vm.swingStab) { m.position.z -= 9 * s; m.rotation.x += 0.15 * s; }
+    else { m.rotation.y += 0.9 * s; m.rotation.z -= 0.7 * s; m.position.x -= 5 * s; m.position.y -= 1.5 * s; }
+    vm.swing = Math.max(0, vm.swing - dt / 0.28);
+  }
+  if (vm.reload > 0) {                                    // reload: dip + roll away, then back up for the last third
+    const t = 1 - vm.reload, s = t < 0.25 ? t / 0.25 : t > 0.7 ? (1 - t) / 0.3 : 1;
+    m.position.y -= 7 * s; m.rotation.x -= 0.45 * s; m.rotation.z += 0.35 * s;
+    vm.reload = Math.max(0, vm.reload - dt / vm.reloadDur);
+  }
 }
 
 export function defaultCheats(aggressive) {
@@ -266,7 +294,9 @@ export function updateAgentVisual(a) {
     else applyChams(a, false);
   }
   a.body.g.position.set(a.pos.x, a.pos.y, a.pos.z);
-  if (!a.body.glb) a.body.legs.rotation.y = a.realYaw || a.yaw;   // GLB: the Hips bone gets it after the mixer (updateBodyGLB)
+  // FACING: rotation.y = yaw points a model's +Z at (sin, 0, cos) — the opposite of the view vector
+  // (-sin, 0, -cos) — and the box body is built face-forward on +Z, so every body yaw carries a half turn
+  if (!a.body.glb) a.body.legs.rotation.y = (a.realYaw || a.yaw) + Math.PI;   // GLB: the Hips pivot gets it after the mixer (updateBodyGLB)
   let upperYaw = a.yaw;
   const jit = (aa.jitter != null ? aa.jitter : 55) * Math.PI / 180;
   if (aa.on && !(a.exposeT > 0)) {          // exposed by an un-hidden shot → the body snaps to the real angle
@@ -287,7 +317,7 @@ export function updateAgentVisual(a) {
     const b = a.body; b.realYaw = a.realYaw || a.yaw; b.aimYaw = upperYaw; b.lean = aimP * 0.4; b.pitch = a.pitch; b.crouchShown = shown;
     const dt = Math.min(0.05, Math.max(0, clock.t - (a._visT == null ? clock.t : a._visT))); a._visT = clock.t; updateBodyGLB(a, dt);
   } else {
-    a.body.upper.rotation.y = upperYaw; a.body.upper.rotation.x = aimP * 0.4;
+    a.body.upper.rotation.y = upperYaw + Math.PI; a.body.upper.rotation.x = aimP * 0.4;
     const sc = shown ? 0.72 : 1; a.body.upper.position.y = shown ? 44 - 12 : 44; a.body.legs.scale.y = sc;   // 44 = waist pivot (see body build)
   }
   if (a._wmKey !== a.cur) {

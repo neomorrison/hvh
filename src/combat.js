@@ -10,7 +10,7 @@ import {
 } from './data.js';
 import { WALLS, segAABB, rayAABB, penetrate, losClear, collideMove, MAP_BOUNDS, CT_SPAWNS, T_SPAWNS } from './world.js';
 import { meshBackend } from './sourcemap.js';
-import { hitboxes, hitboxCenter, eyePos, setViewmodel } from './agents.js';
+import { hitboxes, hitboxCenter, eyePos, setViewmodel, vmKick, vmSwing, vmReload } from './agents.js';
 import { agents, clock } from './state.js';
 import { addTracer, addImpact, addShotLine } from './effects.js';
 import { hitmarker, playHitmarker, addHitLog, damageFlash, updateHUDWeapons, playShot, playBeep, showHint, addKillFeed } from './hud.js';
@@ -690,6 +690,7 @@ export function fireWeaponCommon(a) {
   if (a.cur === "r8" && a.fireMode === "fan") a.firePenalty = (a.firePenalty || 0) + 30;
   onShotFired(a);          // pins the real angles for a moment — unless hide shots pays for it
   sfxFire(a);
+  vmKick(a, w.scope ? 1.5 : a.cur === "r8" || a.cur === "deagle" ? 1.2 : w.auto ? 0.55 : 0.8);   // recoil animation (viewmodel + the third-person gun)
 }
 
 export function hasAnyAmmo(a) { for (const k of [a.slotPrimary, a.slotSecondary]) { if (k && a.weapons[k] && ((a.weapons[k].ammo || 0) > 0 || (a.weapons[k].reserve || 0) > 0)) return true; } return false; }
@@ -851,7 +852,7 @@ export function meleeAttack(a, stab, auto) {
   // cooldown burned and NO sound when whiffing empty air. This is what stops the stab-sound loop.
   if (auto && !best) return false;
   a.fireCd = stab ? w.stabCd : w.slashCd; a.lastShot = performance.now();
-  if (a.isHuman) sfxKnife(a, false);   // local swing (manual whiff still sounds; auto only reaches here with a target)
+  if (a.isHuman) { sfxKnife(a, false); vmSwing(a, stab); }   // local swing (manual whiff still sounds; auto only reaches here with a target)
   if (!best) return false;
   const tf = new THREE.Vector3(-Math.sin(best.realYaw || best.yaw), 0, -Math.cos(best.realYaw || best.yaw));
   const toAtk = a.pos.clone().sub(best.pos).setY(0).normalize();
@@ -883,6 +884,7 @@ export function startReload(a) {
   a.reloadT = w.reload; a.reloadTotal = w.reload; a.scoped = false;
   a._reloadFor = a.cur;
   sfxReloadStart(a);
+  vmReload(a, w.reload);   // viewmodel dips away and comes back over the reload
 }
 export function finishReload(a) {
   const key = a._reloadFor; const w = WEAPONS[key], wp = a.weapons[key]; if (!wp) return;

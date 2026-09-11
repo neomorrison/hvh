@@ -272,9 +272,10 @@ const CHECKS = [
       `back ${back.toFixed(2)} · sway ${sway.toFixed(2)} · spin ${spin.toFixed(2)} · rand ${rand.toFixed(2)} · jitter ${jitter.toFixed(2)}`];
   })],
   ["anti-aim · jitter range drives the body", () => stage(300, (h, f) => {
-    desync(f, { yaw: 'jitter', jitter: 0 }); updateAgentVisual(f); const flat = f.body.upper.rotation.y - f.yaw;
+    // bodies carry a half-turn on every yaw (a model's +Z faces away from the view vector — see agents.js)
+    desync(f, { yaw: 'jitter', jitter: 0 }); updateAgentVisual(f); const flat = f.body.upper.rotation.y - (f.yaw + Math.PI);
     let moved = false;
-    for (let i = 0; i < 40; i++) { clock.t += 0.02; desync(f, { yaw: 'jitter', jitter: 90 }); updateAgentVisual(f); if (Math.abs(f.body.upper.rotation.y - f.yaw) > 0.3) moved = true; }
+    for (let i = 0; i < 40; i++) { clock.t += 0.02; desync(f, { yaw: 'jitter', jitter: 90 }); updateAgentVisual(f); if (Math.abs(f.body.upper.rotation.y - (f.yaw + Math.PI)) > 0.3) moved = true; }
     return [Math.abs(flat) < 1e-6 && moved, `0° holds the body still · 90° swings it`];
   })],
   ["anti-aim · pitch", () => stage(300, (h, f) => {

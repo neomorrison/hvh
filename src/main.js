@@ -7,7 +7,7 @@ import { WEAPONS, TEAM, INACC, LAND_RECOVER, JUMP_VEL, BHOP_GAIN, BHOP_MAX, ECON
 import { agents, refs, GAME, vm, clock, keys, input } from './state.js';
 import { WALLS, NODES, EDGES, segAABB, losClear, penetrate } from './world.js';
 import { updateEffects, nadeProjectiles, shotLines } from './effects.js';
-import { setViewmodel, updateAgentVisual, updateBacktrackGhosts, hitboxCenter, eyePos } from './agents.js';
+import { setViewmodel, updateAgentVisual, updateBacktrackGhosts, hitboxCenter, eyePos, updateViewmodel } from './agents.js';
 import { manualFire, aimbotFire, canShoot, fireWeaponCommon, fireDoubleTap, meleeAttack, moveAgent, computeBloom, startReload, finishReload, switchTo, selectBest, visibleTo, autoStopScale, baseMoveSpeed, recordTick, updateTickbase, beginSimFrame, applyFakeDuck } from './combat.js';
 import { botThink } from './ai.js';
 import { verifyCheats } from './selftest.js';
@@ -348,7 +348,7 @@ export function step(dt, extra) {
   updateHostages(dt); updateNades(dt); updateAreas(dt); updateEffects(dt);
   for (const a of agents) updateAgentVisual(a);
   updateBacktrackGhosts(dt);
-  updateESP(); updateReloadRing(); updateBloomRing(); updateHitChanceHUD(); updateScopeOverlay(); updateR8Hammer(); updateSpecBanner();
+  updateESP(); updateReloadRing(); updateBloomRing(); updateHitChanceHUD(); updateScopeOverlay(); updateR8Hammer(); updateViewmodel(); updateSpecBanner();
   updateCamera();
   updateTopHUD(); updatePlayerHUD(); updateTeamStatus(); updateHUDWeapons();
   $("#roundTimer").textContent = formatTime(GAME.phase === "buy" ? GAME.freeze : GAME.timer);
