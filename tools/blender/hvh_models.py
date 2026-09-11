@@ -207,7 +207,11 @@ def build_player_anims(arm):
     """Arms stay in the aim pose in every clip (the gun is on the chest); legs, hips and torso move."""
     for pb in arm.pose.bones: pb.rotation_mode = 'XYZ'
     S = math.sin; P = 2 * math.pi
-    def idle(t):  return {'Chest': (1.5 * S(t * P), 0, 0), 'Head': (-1.5 * S(t * P), 0, 0)}
+    # TACTICAL STANCE (the CS idle): feet apart, left foot a half step forward, knees soft, hips a touch
+    # turned so the shoulder line squares to the gun — not two feet side by side
+    STANCE = {'Thigh.L': (-14, 0, -9), 'Thigh.R': (10, 0, 9), 'Shin.L': (16, 0, 0), 'Shin.R': (12, 0, 0), 'Hips': (0, 12, 0), 'Spine': (0, -6, 0)}
+    def idle(t):
+        d = dict(STANCE); d['Chest'] = (1.5 * S(t * P), 0, 0); d['Head'] = (-1.5 * S(t * P), 0, 0); return d
     def walk(t):
         s = S(t * P)
         return {'Thigh.L': (30 * s, 0, 0), 'Thigh.R': (-30 * s, 0, 0), 'Shin.L': (max(0, -40 * s), 0, 0), 'Shin.R': (max(0, 40 * s), 0, 0),

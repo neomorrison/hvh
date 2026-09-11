@@ -26,7 +26,7 @@ import { loadSourceMap } from './sourcemap_load.js';
 import { meshBackend } from './sourcemap.js';
 import { setListener, sfxScope, unlockAudio, sfxRevolverCock, setSfxMute } from './sfx.js';
 import { toggleEditor, isEditorOpen, editorUpdate, editorRender, editorKey, loadPatches, editorDebug } from './editor.js';
-import { preloadModels, MODELS } from './models.js';
+import { preloadModels, MODELS, ASSET_V } from './models.js';
 import { applyNightMode } from './visuals.js';
 import { initMenu, menuReady, menuVisible, renderMenu } from './menu.js';
 import { buildPracticeMap, markPracticeAgents, practiceThink, updatePractice } from './practice.js';
@@ -189,7 +189,9 @@ function humanMove(dt) {
   if (c.aimbot.autoStop && human.onGround) {
     const w = WEAPONS[human.cur];
     // don't keep planting between shots on a slow non-auto (SSG/scout bolt cycle) — only stop when actually able to fire now
-    const fireReady = human.fireCd <= 0 || (w && w.auto);
+    // BETWEEN SHOTS: plant only in the frames a round can actually leave (cooldown over). While the gun
+    // cycles you keep moving — autos included — so a spray is stop-shoot-move-stop, not a statue.
+    const fireReady = human.fireCd <= 0;
     // LIMBO BREAKER (what real cheats do): if auto-stop has held you slow for 0.7s and no shot has gone
     // out, the shot is not coming — release for 0.4s and keep moving instead of standing planted
     human._asRelease = Math.max(0, (human._asRelease || 0) - dt);
@@ -502,13 +504,13 @@ function startFromMenu(opts) {
 }
 
 /* ---- the bundled real cs_office map (mesh geometry + spawns) is the main map ---- */
-const MAIN_MAP = { glb: "./maps/cs_office.glb", spawns: "./maps/cs_office.spawns.json", name: "cs_office" };
+const MAIN_MAP = { glb: "./maps/cs_office.glb?v=" + ASSET_V, spawns: "./maps/cs_office.spawns.json?v=" + ASSET_V, name: "cs_office" };   // versioned: never a new loader with a stale map
 let mainMapAssets = null;
 function preloadMainMap() {
   mainMapAssets = Promise.all([
     fetch(MAIN_MAP.glb).then(r => { if (!r.ok) throw new Error("map geometry " + r.status); return r.arrayBuffer(); }),
     fetch(MAIN_MAP.spawns).then(r => r.ok ? r.json() : {}),
-    fetch("./maps/cs_office.nav.json").then(r => r.ok ? r.json() : null).catch(() => null),   // the map's own bot mesh (optional)
+    fetch("./maps/cs_office.nav.json?v=" + ASSET_V).then(r => r.ok ? r.json() : null).catch(() => null),   // the map's own bot mesh (optional)
   ]);
   return mainMapAssets;
 }
@@ -528,7 +530,7 @@ async function deployMainMap() {
     if (ls) ls.textContent = "Loading cs_office…";
     const [glb, spawns, nav] = await (mainMapAssets || preloadMainMap());
     spawns.name = spawns.name || MAIN_MAP.name;
-    const tex = await loadTexturedMap("./maps/cs_office.tex.glb");   // optional, user-supplied real textures
+    const tex = await loadTexturedMap("./maps/cs_office.tex.glb?v=" + ASSET_V);   // the BSP look (tools/bsp), versioned like the rest
     deploySource(glb, spawns, tex, nav);
   } catch (e) {                                          // bundled map unreachable → procedural blockout
     console.warn("cs_office mesh map unavailable, using procedural layout:", e);

@@ -21,6 +21,9 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import * as SkeletonUtils from 'three/addons/utils/SkeletonUtils.js';   // r160 exports clone/retarget as named functions, no namespace object
 
 export const MODELS = { player: null, playerClips: null, weapons: null, nades: null, ready: false };
+// bumped whenever a model or map file changes: GitHub Pages caches assets for ten minutes, and a new
+// loader served with a stale .glb is how rifles ended up sideways in the menu
+export const ASSET_V = '20260910c';
 export const CLIPS = ['idle', 'walk', 'run', 'crouch_idle', 'crouch_walk'];
 export const FACE = Math.PI;
 // gun grip relative to the shoulder-line pivot (Blender GRIP (4,-22,52) vs pivot (0,0,61) → game x, y, z)
@@ -36,7 +39,8 @@ async function loadGLB(url) {
 }
 /* Load all three libraries; missing files are fine (fallbacks stay). Call once at boot. */
 export async function preloadModels(base = './models/') {
-  const [p, w, n] = await Promise.all([loadGLB(base + 'player.glb'), loadGLB(base + 'weapons.glb'), loadGLB(base + 'nades.glb')]);
+  const V = '?v=' + ASSET_V;
+  const [p, w, n] = await Promise.all([loadGLB(base + 'player.glb' + V), loadGLB(base + 'weapons.glb' + V), loadGLB(base + 'nades.glb' + V)]);
   if (p) {
     MODELS.player = p.scene; MODELS.playerClips = p.animations || [];
     // only the Hips translate in our clips (feet grounding); every other translation track is a constant

@@ -250,7 +250,7 @@ try {
     // 2. 100% has to MEAN 100%: it only fires when the whole cone is inside the hitbox, and then it hits.
     human.cheats.aimbot.hitchance = 100;
     foe.pos.set(0, 0, -900); combat.beginSimFrame();
-    if (combat.canShoot(human).ok) { failures++; log('✗ a 900u pistol headshot is not a certainty — 100% hit chance must hold fire'); }
+    { const cs = combat.canShoot(human); if (cs.ok && cs.group === 'head') { failures++; log('✗ a 900u pistol headshot is not a certainty — 100% hit chance must not take the head'); } }   // it may fall through to a body box that IS certain
     foe.pos.set(0, 0, -120); combat.beginSimFrame();
     if (!combat.canShoot(human).ok) { failures++; log('✗ a point-blank standing headshot IS a certainty — 100% hit chance should take it'); }
     let fired = 0, missed = 0;

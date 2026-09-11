@@ -448,7 +448,11 @@ export function computeAccuracy(a, aimPoint, body, group, exposure) {
   // the largest circle guaranteed to fit inside the box's silhouette from ANY angle — if the cone fits
   // inside that, every bullet in it is on the box and there is nothing to sample
   const rin = Math.min(hb.maxX - hb.minX, hb.maxY - hb.minY, hb.maxZ - hb.minZ) / 2;
-  if (cone <= Math.atan2(rin, dist)) return exp;
+  // ...measured from where we are actually AIMING, which is not always the box centre (a safepoint
+  // shifts it): the cone must fit inside the sphere around the centre with the aim point's offset
+  // taken out. Claiming 100% from the centre while aiming 15u off it fired hundreds of guaranteed misses.
+  const offC = Math.hypot(aimPoint.x - (hb.minX + hb.maxX) / 2, aimPoint.y - (hb.minY + hb.maxY) / 2, aimPoint.z - (hb.minZ + hb.maxZ) / 2);
+  if (offC < rin && cone <= Math.atan2(rin - offC, dist)) return exp;
   let hits = 0;
   for (let i = 0; i < HC_N; i++) {
     coneRay(_hcDir, cone, _hcR[i], _hcPhi[i], _hcRay);
@@ -504,9 +508,18 @@ function evalShot(a, tgt, ghost, order, cb, cfg) {
   const want = directVis
     ? Math.min(cfg.minDmg, Math.max(...shots.map(x => x.dmg)))
     : Math.max(cfg.minDmg, cb.autowall.minDmg || 1);
-  // the exposure probe costs four line-of-sight traces, so it is paid once, for the hitbox we settled on
-  for (const x of shots) if (x.dmg >= want) { x.exposure = x.vis ? hitboxExposure(a, ghost, x.group) : 1; return x; }
-  return none;
+  // WHAT IS ACTUALLY HITTABLE. On a visible target every min-damage hitbox is probed for how much of
+  // it is out of cover; a fully exposed box beats a half-hidden one however high up the priority list
+  // the hidden one sits (aiming at a head that is 40% behind a crate is what logged "clipped cover"
+  // all day), and among fully exposed boxes the priority order (then damage) decides. Nothing fully
+  // exposed → the most exposed. Wallbangs keep their damage gate and their own hitbox.
+  const ok = shots.filter(x => x.dmg >= want);
+  if (!ok.length) return none;
+  if (!directVis) { ok[0].exposure = 1; return ok[0]; }
+  for (const x of ok) x.exposure = hitboxExposure(a, ghost, x.group);
+  const full = ok.filter(x => x.exposure >= 0.99);
+  if (full.length) return full.includes(ok[0]) ? ok[0] : full.reduce((b, x) => (x.dmg > b.dmg ? x : b), full[0]);   // priority box if clear, else the clear box that hurts most
+  return ok.reduce((b, x) => (x.exposure > b.exposure ? x : b), ok[0]);
 }
 
 /* The aimbot settings in force for what this agent is holding.  A Deagle wants a different min hit
@@ -567,12 +580,29 @@ function selectShot(a) {
   // hit chance is measured against the BODY the solution belongs to — a rewound aim point on the live
   // hitboxes is a shot at where nobody is, which is what the old signature quietly asked for.
   const accOf = (x, body) => (x.group ? computeAccuracy(a, x.aimPoint, body, x.group, x.exposure) : 0);
-  let best = evalShot(a, tgt, tgt, order, cb, cfg), bestBody = tgt, bestAcc = accOf(best, tgt), bestAge = 0, bestRec = null;
+  // SAFEPOINT is applied to a candidate BEFORE its hit chance is judged: the fake box of a hitbox is only
+  // as far away as it swings (DESYNC_SWING), so the middle of the real and fake pelvis boxes is a few
+  // units off centre and lands either way — while the same shift on the head leaves the box entirely,
+  // which the gate must see so it moves on to the chest instead of firing 100%-certain misses.
+  const spShift = x => { if (x.group && cb.aimbot.safepoint && tgt._desyncOff) { const sw = DESYNC_SWING[x.group] != null ? DESYNC_SWING[x.group] : 1; x.aimPoint = x.aimPoint.clone().addScaledVector(tgt._desyncOff, 0.5 * sw); x.sp = true; } return x; };
+  let best = spShift(evalShot(a, tgt, tgt, order, cb, cfg)), bestBody = tgt, bestAcc = accOf(best, tgt), bestAge = 0, bestRec = null;
   // FORCE BAIM: the pelvis is the box a desync moves least, the chest is the bigger one — take whichever
   // this cone actually lands on more, so body aim is the MORE accurate choice it is meant to be
   if (cb.aimbot.forceBody && best.group === "stomach") {
-    const alt = evalShot(a, tgt, tgt, ["chest"], cb, cfg);
+    const alt = spShift(evalShot(a, tgt, tgt, ["chest"], cb, cfg));
     if (alt.group) { const acc = accOf(alt, tgt); if (acc > bestAcc) { best = alt; bestAcc = acc; } }
+  }
+  // TARGET WHAT CLEARS THE GATE. If the priority box can't make min hit chance right now (half in cover,
+  // or a safepoint pushed its aim point off the head), try the other boxes one by one and take the
+  // first that does — a chest at 100% beats a head at 40% every time. Nothing clears it → the best.
+  if (best.group && bestAcc * 100 < minHc) {
+    for (const g of order) {
+      if (g === best.group) continue;
+      const alt = spShift(evalShot(a, tgt, tgt, [g], cb, cfg)); if (!alt.group) continue;
+      const acc = accOf(alt, tgt);
+      if (acc * 100 >= minHc) { best = alt; bestAcc = acc; break; }
+      if (acc > bestAcc) { best = alt; bestAcc = acc; }
+    }
   }
   // BACKTRACK — only when the live shot isn't already good enough. A peeker who is behind cover NOW
   // was standing in the open a few ticks ago; the server still accepts a hit on that tick.
@@ -582,7 +612,7 @@ function selectShot(a) {
   const bt = backtrackTicks(a);
   if (bt > 0 && bestAcc * 100 < minHc && (!best.group || trailMoved(tgt, bt))) {
     for (const rec of sampleTrail(tgt, bt)) {
-      const alt = evalShot(a, tgt, rec, order, cb, cfg);
+      const alt = spShift(evalShot(a, tgt, rec, order, cb, cfg));
       if (!alt.group) continue;
       const acc = accOf(alt, rec);
       if (acc > bestAcc) { best = alt; bestBody = rec; bestAcc = acc; bestAge = (tgt._tick | 0) - rec.tick; bestRec = rec; }
@@ -599,10 +629,7 @@ function selectShot(a) {
   // wrong read no longer whiffs — it just costs you half the desync's width.  That is the whole trade:
   // a body shot that keeps landing, instead of a head shot that lands only when the resolver wins.  It
   // pays for itself in hit chance automatically, because the gate measures this shifted point.
-  if (cb.aimbot.safepoint && tgt._desyncOff) {
-    res.aimPoint = res.aimPoint.clone().addScaledVector(tgt._desyncOff, 0.5);
-    res.safepoint = true;
-  }
+  res.safepoint = !!best.sp;   // the safepoint shift was applied to the candidate before it was judged (spShift above)
   return res;
 }
 
@@ -846,7 +873,7 @@ export function aimbotFire(a) {
       applyHit(a, cs.tgt, hit.group, hit.dist, cs.through);
       if (a.isHuman && cs.btTicks > 0) addHitLog(`backtracked ${cs.btTicks} tick${cs.btTicks > 1 ? 's' : ''}`, "hs");
     } else {
-      if (a.isHuman) addHitLog(blocked ? "clipped cover" : lostRead ? "desync beat the resolver" : "missed — inaccuracy", "inacc");
+      if (a.isHuman) addHitLog(blocked ? "clipped cover" : lostRead ? "desync beat the resolver" : cs.safepoint && cs.tgt._desyncOff ? "safepoint — landed between real and fake" : "missed — inaccuracy", "inacc");
       addImpact(end);
     }
     shotLine(a, me, end, !!(hit && !blocked));
