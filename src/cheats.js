@@ -128,6 +128,7 @@ function tabs() {
         sw("Fake duck", () => c.antiaim.fakeduck, v => c.antiaim.fakeduck = v, null, true),
         keybind("Fake duck key", () => c.antiaim.fakeduckKey || "KeyX", v => c.antiaim.fakeduckKey = v, true),
         sel("Fake duck mode", ["hold", "toggle"], () => c.antiaim.fakeduckMode || "hold", v => c.antiaim.fakeduckMode = v, true),
+        sw("Moonwalk (legs animate backwards while you move)", () => !!c.antiaim.moonwalk, v => c.antiaim.moonwalk = v),
         note(`The desync angle is the fake body's offset made geometry — 0° really is no fake at all now, and 58° swings ` +
              `it about a body's width off you. <b>freestanding</b> looks at the map and puts the fake where the nearest ` +
              `enemy can see it, leaving the real you behind the corner, so an un-resolved shot goes into the wall. ` +
@@ -178,6 +179,15 @@ function tabs() {
         note(`Every round <b>you</b> fire leaves a beam from its muzzle to wherever it actually ended up, drawn through ` +
              `walls and faded out over the duration above. A tracer is gone in 0.2s; this is the one you can still look ` +
              `at afterwards to see whether a shot was spread, a backtrack, or the resolver losing to a desync.`),
+      ] },
+      { title: "World & view", rows: [
+        sw("Night mode", () => !!c.visuals.nightMode, v => c.visuals.nightMode = v),
+        rng("Darkness", 10, 100, () => c.visuals.nightLevel != null ? c.visuals.nightLevel : 70, v => c.visuals.nightLevel = v, v => v + "%", true),
+        rng("Field of view", 60, 120, () => c.visuals.fov || 74, v => c.visuals.fov = v, v => v + "°"),
+        rng("Viewmodel X", -60, 60, () => c.visuals.vmX || 0, v => c.visuals.vmX = v, v => (v / 10).toFixed(1), true),
+        rng("Viewmodel Y", -60, 60, () => c.visuals.vmY || 0, v => c.visuals.vmY = v, v => (v / 10).toFixed(1), true),
+        rng("Viewmodel Z", -80, 80, () => c.visuals.vmZ || 0, v => c.visuals.vmZ = v, v => (v / 10).toFixed(1), true),
+        sw("No visual recoil (viewmodel stays still)", () => !!c.visuals.noRecoilAnim, v => c.visuals.noRecoilAnim = v, null, true),
       ] },
       { title: "Debug", rows: [
         sw("Hit chance indicator", () => c.visuals.hitchance, v => c.visuals.hitchance = v),

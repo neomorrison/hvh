@@ -20,13 +20,17 @@ import {
   updateESP, updateReloadRing, updateBloomRing, updateHitChanceHUD, updateScopeOverlay, updateR8Hammer,
   renderScoreboard, centerMessage, showHint, showHintOnce, formatTime, buildCrosshair, anyPanelOpen, audio, setBeepMute, playBeep,
 } from './hud.js';
-import { toggleCheatMenu, buildCheatMenu, loadConfig, saveConfig, syncCheatUI, syncWeaponSel } from './cheats.js';
+import { toggleCheatMenu, buildCheatMenu, loadConfig, saveConfig, syncCheatUI, syncWeaponSel, optimizedCheats } from './cheats.js';
 import { buildDefaultMap } from './map.js';
 import { loadSourceMap } from './sourcemap_load.js';
 import { meshBackend } from './sourcemap.js';
 import { setListener, sfxScope, unlockAudio, sfxRevolverCock, setSfxMute } from './sfx.js';
 import { toggleEditor, isEditorOpen, editorUpdate, editorRender, editorKey, loadPatches, editorDebug } from './editor.js';
 import { preloadModels, MODELS } from './models.js';
+import { applyNightMode } from './visuals.js';
+import { initMenu, menuReady, menuVisible, renderMenu } from './menu.js';
+import { buildPracticeMap, markPracticeAgents, practiceThink, updatePractice } from './practice.js';
+import { defaultCheats } from './agents.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
 const $ = s => document.querySelector(s);
@@ -83,7 +87,7 @@ function adminLogin() {
 addEventListener('keydown', e => {
   if (e.code === "Backquote") { if (adminUnlocked) toggleEditor(); else adminLogin(); e.preventDefault(); return; }     // ~ : map editor, gated behind admin login
   if (isEditorOpen()) { keys[e.code] = true; editorKey(e.code); e.preventDefault(); return; }   // editor swallows input
-  if (e.code === "KeyI" && GAME.phase !== "editor") { toggleCheatMenu(); e.preventDefault(); return; }
+  if (e.code === "KeyI" && GAME.phase !== "editor") { if (!GAME.injected) { showHint("No cheat loaded — INJECT it from the main menu first"); e.preventDefault(); return; } toggleCheatMenu(); e.preventDefault(); return; }
   if (GAME.phase === "warmup" || GAME.phase === "editor") return;
   const human = refs.human;
   keys[e.code] = true;
@@ -311,7 +315,7 @@ function loop(now) {
     } else ff.accum = 0;
   } else if (isEditorOpen()) editorUpdate();
   updateFFBanner();
-  render();
+  if (GAME.phase === "warmup" && menuVisible()) renderMenu(); else render();   // main menu: the operator scene, not the empty world
 }
 export function step(dt, extra) {
   beginSimFrame();                       // invalidates the per-step aimbot target memo (see canShoot)
@@ -342,13 +346,13 @@ export function step(dt, extra) {
   for (const a of agents) {
     if (a.isHuman) continue;
     if (GAME.phase === "buy") a.body.g.position.copy(a.pos);
-    else if (canAct) botThink(a, dt);
+    else if (canAct) { if (a.practiceTarget || a.practiceGuard) practiceThink(a, dt); else botThink(a, dt); }
   }
   for (const a of agents) recordTick(a, dt);     // lag-compensation history — everyone's backtrack reads this
-  updateHostages(dt); updateNades(dt); updateAreas(dt); updateEffects(dt);
+  updateHostages(dt); updateNades(dt); updateAreas(dt); updateEffects(dt); updatePractice(dt);
   for (const a of agents) updateAgentVisual(a);
   updateBacktrackGhosts(dt);
-  updateESP(); updateReloadRing(); updateBloomRing(); updateHitChanceHUD(); updateScopeOverlay(); updateR8Hammer(); updateViewmodel(); updateSpecBanner();
+  updateESP(); updateReloadRing(); updateBloomRing(); updateHitChanceHUD(); updateScopeOverlay(); updateR8Hammer(); updateViewmodel(); applyNightMode(refs.human && refs.human.cheats.visuals); updateSpecBanner();
   updateCamera();
   updateTopHUD(); updatePlayerHUD(); updateTeamStatus(); updateHUDWeapons();
   $("#roundTimer").textContent = formatTime(GAME.phase === "buy" ? GAME.freeze : GAME.timer);
@@ -363,7 +367,7 @@ function updateCamera() {
     setListener(human.pos.x, human.eye, human.pos.z, human.yaw, human);
     const scopedNow = human.scoped && WEAPONS[human.cur] && WEAPONS[human.cur].scope;
     const tp = GAME.thirdPerson;
-    const fov = (scopedNow && !tp) ? 40 : 74;
+    const fov = (scopedNow && !tp) ? 40 : (human.cheats.visuals.fov || 74);   // menu FOV slider
     if (Math.abs(camera.fov - fov) > 0.5) { camera.fov += (fov - camera.fov) * 0.4; camera.updateProjectionMatrix(); }
     if (tp) {
       // orbit BEHIND the player along -view so looking up/down keeps them centered (instead of
@@ -418,7 +422,9 @@ function render() { if (isEditorOpen()) { editorRender(); return; } renderer.ren
 
 /* ============================== boot / deploy ============================== */
 // the human spawns on a RANDOM team each match; buildTeams keeps both sides 12-strong regardless
-function assignHumanTeam() { const ct = Math.random() < 0.5; GAME.humanTeam = ct ? TEAM.CT : TEAM.T; GAME.ctIsHuman = ct; }
+function assignHumanTeam() { const pick = GAME.humanTeamPick; const ct = pick === "CT" ? true : pick === "T" ? false : Math.random() < 0.5; GAME.humanTeam = ct ? TEAM.CT : TEAM.T; GAME.ctIsHuman = ct; }
+// cheats only exist once the cheat is "injected" from the main menu; otherwise you play legit
+function applyCheatState() { if (GAME.injected) { if (!loadConfig()) refs.human.cheats = optimizedCheats(); } else refs.human.cheats = defaultCheats(false); buildCheatMenu(); }   // injected + nothing saved → the optimized default
 function deploy() {
   $("#startPanel").classList.remove("show");
   GAME.customMap = null; GAME.sourceMap = null;
@@ -427,8 +433,7 @@ function deploy() {
   GAME.round = 1; GAME.half = 1; GAME.scoreCT = 0; GAME.scoreT = 0; GAME.lossStreak = { CT: 0, T: 0 };
   assignHumanTeam();
   buildTeams();
-  loadConfig();
-  buildCheatMenu();
+  applyCheatState();
   startRound();
   renderer.domElement.requestPointerLock();
   audio();
@@ -441,10 +446,27 @@ function deploySource(glb, spawns, texturedScene, nav) {
   loadPatches(GAME.sourceMap, texturedScene);   // re-apply saved map patches (collision + hidden surfaces)
   GAME.round = 1; GAME.half = 1; GAME.scoreCT = 0; GAME.scoreT = 0; GAME.lossStreak = { CT: 0, T: 0 };
   assignHumanTeam();
-  buildTeams(); loadConfig(); buildCheatMenu(); startRound();
+  buildTeams(); applyCheatState(); startRound();
   renderer.domElement.requestPointerLock(); audio();
   showHint(`Imported ${GAME.sourceMap}: ${info.triangles | 0} tris · ${info.navNodes} nav nodes`);
   return info;
+}
+/* aim_practice: the config range (see practice.js) — no rounds, unarmed targets, one armed guard */
+function deployPractice() {
+  $("#startPanel").classList.remove("show");
+  buildPracticeMap();
+  GAME.customMap = null; GAME.sourceMap = "aim_practice"; GAME.phase = "idle"; GAME.practice = true;
+  GAME.round = 1; GAME.half = 1; GAME.scoreCT = 0; GAME.scoreT = 0; GAME.lossStreak = { CT: 0, T: 0 };
+  GAME.humanTeamPick = "CT"; assignHumanTeam();
+  buildTeams(); markPracticeAgents(); applyCheatState(); startRound();
+  renderer.domElement.requestPointerLock(); audio();
+  showHint("aim_practice — targets respawn · B buys anything · the guard at the end of the lane shoots back");
+}
+/* the PLAY screen's DEPLOY: map + bots per team + side + whether the cheat is injected */
+function startFromMenu(opts) {
+  GAME.botsPerTeam = Math.max(1, Math.min(12, opts.bots | 0 || 12));
+  GAME.humanTeamPick = opts.team || "random"; GAME.injected = !!opts.injected; GAME.practice = false;
+  if (opts.map === "practice") deployPractice(); else deployMainMap();
 }
 
 /* ---- the bundled real cs_office map (mesh geometry + spawns) is the main map ---- */
@@ -485,9 +507,7 @@ async function deployMainMap() {
 
 function boot() {
   buildCrosshair();
-  $("#loadStat").textContent = "Ready.";
-  const btn = $("#playBtn"); btn.disabled = false; btn.textContent = "DEPLOY";
-  btn.onclick = () => deployMainMap();
+  initMenu({ onDeploy: startFromMenu }); menuReady();     // CS2-style main menu (menu.js) — DEPLOY goes through startFromMenu
   preloadMainMap().catch(() => {});                      // warm the download while on the start screen
 }
 

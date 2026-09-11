@@ -112,13 +112,15 @@ export function setViewmodel(key, isNade) {
    kick: the gun jumps back and up on every shot and settles; swing: the knife slashes across;
    reload: the gun dips out of view, tilts, and comes back over the reload time. Third-person bodies get
    the same kick on their gun pivot (body.kick, see updateBodyGLB). */
-export function vmKick(a, strength = 1) { if (a && a.body && a.body.glb) a.body.kick = Math.min(1, (a.body.kick || 0) + 0.6 * strength); if (a && a.isHuman) vm.kick = Math.min(1.5, (vm.kick || 0) + strength); }
+export function vmKick(a, strength = 1) { if (a && a.body && a.body.glb) a.body.kick = Math.min(1, (a.body.kick || 0) + 0.6 * strength); if (a && a.isHuman && !(a.cheats.visuals && a.cheats.visuals.noRecoilAnim)) vm.kick = Math.min(1.5, (vm.kick || 0) + strength); }
 export function vmSwing(a, stab) { if (a && a.isHuman) { vm.swing = 1; vm.swingStab = !!stab; } }
 export function vmReload(a, dur) { if (a && a.isHuman) { vm.reload = 1; vm.reloadDur = Math.max(0.3, dur || 1); } }
 export function updateViewmodel() {
   const now = performance.now(), dt = Math.min(0.05, (now - (vm._t || now)) / 1000); vm._t = now;
   const m = vm.current; if (!m || !vm.base) return;
-  const b = vm.base; m.position.copy(b.p); m.rotation.copy(b.r);
+  const b = vm.base, vz = (refs.human && refs.human.cheats.visuals) || {};
+  m.position.copy(b.p); m.rotation.copy(b.r);
+  m.position.x += (vz.vmX || 0) * 0.1; m.position.y += (vz.vmY || 0) * 0.1; m.position.z += (vz.vmZ || 0) * 0.1;   // viewmodel offset sliders (tenths of a unit)
   if (vm.kick > 0) {                                      // recoil: back + up, fast in, exponential settle
     const k = vm.kick; m.position.z += 2.2 * k; m.position.y += 0.6 * k; m.rotation.x += 0.09 * k; m.rotation.z += 0.02 * k;
     vm.kick = Math.max(0, k - dt * 7);
@@ -155,12 +157,13 @@ export function defaultCheats(aggressive) {
     // held (or between presses in toggle mode). It forces a real crouch, so leaving it permanently on
     // would leave you walking at a third speed with no way to stand up.
     antiaim: { on: aggressive, yaw: "jitter", jitter: 55, pitch: "down", desync: true, desyncAngle: 58, mode: "freestanding",
-      fakeduck: false, fakeduckKey: "KeyX", fakeduckMode: "hold" },
+      fakeduck: false, fakeduckKey: "KeyX", fakeduckMode: "hold", moonwalk: false },
     // backtrack is in TICKS (12 tk @64 = 187ms). doubleTap and hideShots shift the tickbase in opposite
     // directions, so only one can apply to a given shot — double tap wins when both are on.
     tickbase: { backtrack: aggressive ? 12 : 0, hideShots: aggressive, doubleTap: false },
     visuals: { esp: false, boxes: true, health: true, name: true, distance: false, snaplines: false, chams: false, desyncGhost: false, backtrackTrail: false, backtrackGhost: false, chamsVisible: '#ff2a44', chamsOccluded: '#7a4cff',
-      shotLines: true, shotLineTime: 1.5, shotLineHit: '#ff4d6d', shotLineMiss: '#4dc3ff', hitchance: false },
+      shotLines: true, shotLineTime: 1.5, shotLineHit: '#ff4d6d', shotLineMiss: '#4dc3ff', hitchance: false,
+      nightMode: false, nightLevel: 70, fov: 74, vmX: 0, vmY: 0, vmZ: 0, noRecoilAnim: false },
   };
 }
 
@@ -320,7 +323,8 @@ export function updateAgentVisual(a) {
     a.body.upper.rotation.y = upperYaw + Math.PI; a.body.upper.rotation.x = aimP * 0.4;
     const sc = shown ? 0.72 : 1; a.body.upper.position.y = shown ? 44 - 12 : 44; a.body.legs.scale.y = sc;   // 44 = waist pivot (see body build)
   }
-  if (a._wmKey !== a.cur) {
+  if (a.unarmed) { if (a.body.weapon) { a.body.holder.remove(a.body.weapon); a.body.weapon = null; a._wmKey = null; } }   // practice targets carry nothing
+  else if (a._wmKey !== a.cur) {
     a._wmKey = a.cur;
     if (a.body.weapon) a.body.holder.remove(a.body.weapon);
     a.body.weapon = buildWeaponModel(a.cur); a.body.weapon.scale.setScalar(1.0); a.body.holder.add(a.body.weapon);

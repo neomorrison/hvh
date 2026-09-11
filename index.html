@@ -200,10 +200,41 @@
   .sbrow.dead{opacity:.45;} .sbrow.me{outline:1px solid #ffd86b;}
 
   /* start screen */
-  #startCard { width:640px; text-align:center; }
-  #startCard h1 { font-size:34px; letter-spacing:1px; }
-  #startCard h1 .hvh { color:#ff4d6d; }
-  #startCard .tag { color:#9aa4b2; margin:6px 0 16px; font-size:14px; }
+  /* ---- CS2-style main menu: the 3D operator renders behind, the chrome floats on top ---- */
+  #startPanel { background:transparent; backdrop-filter:none; display:none; align-items:stretch; justify-content:flex-start; flex-direction:column; }
+  #startPanel.show { display:flex; }
+  #menuNav { height:58px; display:flex; align-items:center; padding:0 26px; gap:30px; background:linear-gradient(rgba(6,8,12,.72),rgba(6,8,12,.15)); pointer-events:auto; }
+  #menuNav .mlogo { font-weight:bold; font-size:22px; letter-spacing:1px; color:#fff; } #menuNav .mlogo span { color:#ff4d6d; font-weight:normal; font-size:14px; }
+  #menuNav nav { display:flex; gap:6px; margin-left:auto; margin-right:auto; }
+  #menuNav nav a { font-size:20px; letter-spacing:2px; color:#cdd6e4; padding:8px 22px; cursor:pointer; border-bottom:2px solid transparent; text-transform:uppercase; }
+  #menuNav nav a.on { color:#fff; border-bottom-color:#ffd86b; font-size:24px; }
+  #menuNav nav a:hover { color:#fff; }
+  #menuNav .mright { display:flex; align-items:center; gap:12px; }
+  #injectState { font-size:11px; color:#9aa4b2; max-width:220px; text-align:right; }
+  #injectBtn { pointer-events:auto; background:linear-gradient(#ff4d6d,#d62d4c); border:none; color:#fff; font-weight:bold; letter-spacing:1px; padding:9px 18px; border-radius:6px; cursor:pointer; }
+  #injectBtn.done { background:linear-gradient(#39ff5a,#1fa53a); color:#06110a; }
+  .mview { flex:1; display:flex; align-items:center; justify-content:center; pointer-events:none; }
+  .mview[hidden] { display:none; }
+  .mhero { align-self:flex-end; margin:0 0 70px 80px; margin-right:auto; pointer-events:auto; }
+  .mtitle { font-size:54px; font-weight:bold; letter-spacing:1px; color:#fff; text-shadow:0 4px 24px rgba(0,0,0,.7); } .mtitle b { color:#ff4d6d; }
+  .msub { color:#e8e8e8; opacity:.85; margin:4px 0 18px; font-size:15px; text-shadow:0 2px 8px #000; }
+  .mplay { background:linear-gradient(#ffd86b,#e0a800); border:none; color:#1a1400; font-weight:bold; font-size:22px; letter-spacing:2px; padding:12px 44px; border-radius:6px; cursor:pointer; box-shadow:0 8px 30px rgba(255,216,107,.35); }
+  .mcard { pointer-events:auto; width:720px; background:rgba(12,16,22,.9); border:1px solid #2a3340; border-radius:10px; padding:20px 26px; box-shadow:0 20px 60px rgba(0,0,0,.6); text-align:center; }
+  .mh { font-size:13px; letter-spacing:3px; color:#9aa4b2; margin-bottom:14px; }
+  .mapcards { display:flex; gap:14px; justify-content:center; }
+  .mapcard { width:300px; border:2px solid #2a3340; border-radius:8px; overflow:hidden; cursor:pointer; background:#0e131b; text-align:left; }
+  .mapcard.on { border-color:#ffd86b; box-shadow:0 0 0 2px rgba(255,216,107,.25); }
+  .mapart { height:110px; background:linear-gradient(135deg,#3b4a62,#141a24); }
+  .mapart.office { background:linear-gradient(135deg,#5a6a86 0%,#2b3547 60%,#1a2130 100%); }
+  .mapart.range { background:linear-gradient(135deg,#6b5a3c 0%,#3a3020 60%,#20180e 100%); }
+  .mapname { font-weight:bold; font-size:16px; padding:8px 12px 2px; color:#fff; }
+  .mapdesc { font-size:12px; color:#9aa4b2; padding:0 12px 10px; line-height:1.4; }
+  .mrow { display:flex; align-items:center; gap:14px; margin:14px 10px 0; font-size:14px; }
+  .mrow label { color:#cdd6e4; min-width:120px; text-align:left; }
+  .mrow input[type=range] { flex:1; }
+  .mrow .sides label { min-width:0; margin-right:14px; cursor:pointer; }
+  #startPanel .controls { width:520px; }
+  body.menu #hud > *:not(#esp) { display:none !important; }   /* main menu: no match HUD, but the ESP canvas draws the operator's box */
   .controls { display:grid; grid-template-columns:1fr 1fr; gap:6px 22px; text-align:left; font-size:13px; margin:14px 4px; }
   .controls b{ color:#ffd86b; display:inline-block; min-width:96px; }
   #playBtn { pointer-events:auto; margin-top:14px; background:linear-gradient(#ff4d6d,#d62d4c); border:none; color:#fff; font-size:18px; font-weight:bold; padding:12px 40px; border-radius:8px; cursor:pointer; box-shadow:0 6px 20px rgba(255,77,109,.35); }
@@ -345,24 +376,45 @@
 
 <!-- ================= MAP BUILDER ================= -->
 <!-- ================= START SCREEN ================= -->
-<div class="panel show" id="startPanel"><div class="card" id="startCard">
-  <h1>cs_office <span class="hvh">HvH</span></h1>
-  <div class="tag">CS2 Hack-vs-Hack · 12 v 12, everyone cheats · Best-of-24 (MR12), switch at half</div>
-  <div class="controls">
-    <div><b>WASD</b> move</div><div><b>Mouse</b> look</div>
-    <div><b>Left click</b> fire</div><div><b>Right click</b> scope / burst / fan</div>
-    <div><b>R</b> reload (auto at empty)</div><div><b>1 / 2 / 3</b> rifle / pistol / knife</div>
-    <div><b>Shift</b> walk</div><div><b>C</b> crouch · <b>Space</b> jump</div>
-    <div><b>B</b> buy menu</div><div><b>E</b> rescue / pick up hostage</div>
-    <div><b>4 / G</b> grenade (click=throw)</div><div><b>V</b> third person</div>
-    <div class="you"><b>I</b> CHEAT MENU</div><div class="you"><b>F1</b>-<b>F8</b> cheat toggles · <b>Tab</b> scores</div>
+<div class="panel show" id="startPanel">
+  <div id="menuNav">
+    <span class="mlogo">hvh<span>.online</span></span>
+    <nav><a data-view="home" class="on">HOME</a><a data-view="play">PLAY</a><a data-view="keys">KEYS</a></nav>
+    <div class="mright"><span id="injectState"></span><button id="injectBtn">INJECT CHEAT</button></div>
   </div>
-  <div id="loadStat">Loading Three.js…</div>
-  <div>
-    <button id="playBtn" disabled>Loading…</button>
+  <div class="mview" data-view="home">
+    <div class="mhero"><div class="mtitle">cs_office <b>HvH</b></div><div class="msub">Hack vs Hack · everyone cheats · MR12</div>
+      <button class="mplay" onclick="document.querySelector('#menuNav a[data-view=play]').click()">PLAY ▸</button></div>
   </div>
-  <div class="legal">Original fan recreation. Map layout, economy &amp; weapon stats reproduce Counter-Strike 2 mechanics; all original geometry, art and code are original — no Valve assets are bundled. Imported maps load from your own files at runtime. For educational/entertainment purposes.</div>
-</div></div>
+  <div class="mview" data-view="play" hidden>
+    <div class="mcard">
+      <div class="mh">SELECT MAP</div>
+      <div class="mapcards">
+        <div class="mapcard on" data-map="cs_office"><div class="mapart office"></div><div class="mapname">cs_office</div><div class="mapdesc">Hostage rescue · the real map from the Source BSP · bots path on Valve's nav</div></div>
+        <div class="mapcard" data-map="practice"><div class="mapart range"></div><div class="mapname">aim_practice</div><div class="mapdesc">Config range: unarmed targets that respawn, a peek lane with one armed guard that aimbots you</div></div>
+      </div>
+      <div class="mrow"><label>Bots per team</label><input id="botsRange" type="range" min="1" max="12" value="12"><span id="botsOut">12 v 12</span></div>
+      <div class="mrow"><label>Your side</label><span class="sides"><label><input type="radio" name="side" value="random" checked> random</label><label><input type="radio" name="side" value="CT"> CT</label><label><input type="radio" name="side" value="T"> T</label></span></div>
+      <div id="loadStat">Loading Three.js…</div>
+      <button id="playBtn" disabled>Loading…</button>
+      <div class="legal">Original fan recreation. Map geometry is read from your own game files at build time; all code and models are original. For educational/entertainment purposes.</div>
+    </div>
+  </div>
+  <div class="mview" data-view="keys" hidden>
+    <div class="mcard">
+      <div class="mh">KEYS</div>
+      <div class="controls">
+        <div><b>WASD</b> move</div><div><b>Mouse</b> look</div>
+        <div><b>Left click</b> fire</div><div><b>Right click</b> scope / burst / fan</div>
+        <div><b>R</b> reload (auto at empty)</div><div><b>1 / 2 / 3</b> rifle / pistol / knife</div>
+        <div><b>Shift</b> walk</div><div><b>C</b> crouch · <b>Space</b> jump</div>
+        <div><b>B</b> buy menu</div><div><b>E</b> rescue / pick up hostage</div>
+        <div><b>4 / G</b> grenade (click=throw)</div><div><b>V</b> third person</div>
+        <div class="you"><b>I</b> CHEAT MENU (after inject)</div><div class="you"><b>F1</b>-<b>F8</b> cheat toggles · <b>Tab</b> scores</div>
+      </div>
+    </div>
+  </div>
+</div>
 
 <script type="importmap">
 { "imports": {

@@ -105,7 +105,12 @@ export function updateBodyGLB(a, dt) {
     to.reset().setEffectiveWeight(1); to.timeScale = 1;
     if (from) from.setEffectiveWeight(0); b.cur = want;
   }
-  const act = b.actions[b.cur]; if (act && (b.cur === 'walk' || b.cur === 'run' || b.cur === 'crouch_walk')) act.timeScale = THREE.MathUtils.clamp(sp / (b.cur === 'run' ? 220 : 120), 0.4, 1.8);
+  const act = b.actions[b.cur];
+  if (act && (b.cur === 'walk' || b.cur === 'run' || b.cur === 'crouch_walk')) {
+    // moonwalk: the stride plays backwards while you move forwards (legs say "away", body goes "toward")
+    const moon = a.cheats && a.cheats.antiaim && a.cheats.antiaim.on && a.cheats.antiaim.moonwalk;
+    act.timeScale = THREE.MathUtils.clamp(sp / (b.cur === 'run' ? 220 : 120), 0.4, 1.8) * (moon ? -1 : 1);
+  }
   b.mixer.update(dt);
   const dy = b.aimYaw - b.realYaw;
   if (b.hipsPiv) b.hipsPiv.quaternion.setFromAxisAngle(_Y, b.realYaw + FACE);
