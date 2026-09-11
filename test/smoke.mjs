@@ -189,11 +189,11 @@ try {
     human.crouch = false; human.scoped = false; human.onGround = true; human.walk = false; human.bhopBoost = 1;
     human.pos.set(0, 0, 0); human.eye = 64; human.yaw = 0; human.pitch = 0; human.vel.set(0, 0, 0);
     const seen = [];
-    for (const dist of [100, 400, 550]) {
+    for (const dist of [100, 1200, 1800]) {   // CS inaccuracy: a USP is certain to 400u; the slow-down bites past ~1000u
       foe.pos.set(0, 0, -dist); human.vel.set(0, 0, 0);
       combat.beginSimFrame(); seen.push(+combat.autoStopScale(human, false).toFixed(2));
     }
-    log('  auto-stop speed scale at 100u/400u/550u:', JSON.stringify(seen));
+    log('  auto-stop speed scale at 100u/1200u/1800u:', JSON.stringify(seen));
     if (seen[0] !== 1) { failures++; log('✗ auto-stop should not slow a point-blank shot at all'); }
     if (!seen.some(v => v > 0 && v < 1)) { failures++; log('✗ auto-stop should slow proportionally, not hard-stop'); }
     // Past the range the hit chance is reachable at all it must PLANT, not quietly hand back full speed:
@@ -232,18 +232,18 @@ try {
 
     // 1. the estimator predicts the sampler. Both walk the same CS spread distribution, so a big
     //    Monte-Carlo run of real bullets has to land on the number the menu gates on.
-    foe.pos.set(0, 0, -420); combat.beginSimFrame();
+    foe.pos.set(0, 0, -1600); combat.beginSimFrame();   // with CS inaccuracy a standing USP is certain on a head at 420u; 1600u is the uncertain shot
     const from = agentsMod.eyePos(human), aim = agentsMod.hitboxCenter(foe, 'head');
     const dir = aim.clone().sub(from).normalize(), cone = combat.computeBloom(human);
     const predicted = combat.computeAccuracy(human, aim, foe, 'head', 1);
     let land = 0; const N = 20000;
     for (let i = 0; i < N; i++) {
-      const d = combat.coneRay(dir, cone, Math.random(), Math.random() * Math.PI * 2);
+      const d = combat.coneRay(dir, cone, combat.triRoll(), combat.triRoll());   // the engine's roll (x, y each a sum of two uniforms)
       const h = combat.traceHitbox(from, d, foe);
       if (h && h.group === 'head') land++;
     }
     const measured = land / N;
-    log('  hit chance at 420u on the head: predicted', (predicted * 100).toFixed(1) + '%', '· measured over', N, 'bullets', (measured * 100).toFixed(1) + '%');
+    log('  hit chance at 1600u on the head: predicted', (predicted * 100).toFixed(1) + '%', '· measured over', N, 'bullets', (measured * 100).toFixed(1) + '%');
     if (Math.abs(predicted - measured) > 0.05) { failures++; log('✗ the hit chance the aimbot gates on is not the hit chance the bullet has'); }
     if (!(predicted > 0.02 && predicted < 0.98)) { failures++; log('✗ this range was meant to be a genuinely uncertain shot — the test proves nothing'); }
 

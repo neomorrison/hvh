@@ -151,7 +151,7 @@ const CHECKS = [
     h.cheats.aimbot.autoScope = true; beginSimFrame(); aimbotFire(h); const on = h.scoped;
     return [!off && on, `off stays unscoped: ${!off} · on scopes: ${on}`];
   })],
-  ["aimbot · auto stop", () => stage(550, (h) => {
+  ["aimbot · auto stop", () => stage(1800, (h) => {   // far enough that a running USP fails the gate and a planted one passes it
     h.cheats.aimbot.hitchance = 50; beginSimFrame();
     const sc = autoStopScale(h, false);
     h.cur = 'knife'; beginSimFrame(); const knife = autoStopScale(h, false);
@@ -272,13 +272,15 @@ const CHECKS = [
       `back ${back.toFixed(2)} · sway ${sway.toFixed(2)} · spin ${spin.toFixed(2)} · rand ${rand.toFixed(2)} · jitter ${jitter.toFixed(2)}`];
   })],
   ["anti-aim · jitter range drives the body", () => stage(300, (h, f) => {
-    desync(f, { yaw: 'jitter', jitter: 0 }); updateAgentVisual(f); const flat = f.body.upper.rotation.y - f.yaw;
+    // bodies carry a half-turn on every yaw (a model's +Z faces away from the view vector — see agents.js)
+    desync(f, { yaw: 'jitter', jitter: 0 }); updateAgentVisual(f); const flat = f.body.upper.rotation.y - (f.yaw + Math.PI);
     let moved = false;
-    for (let i = 0; i < 40; i++) { clock.t += 0.02; desync(f, { yaw: 'jitter', jitter: 90 }); updateAgentVisual(f); if (Math.abs(f.body.upper.rotation.y - f.yaw) > 0.3) moved = true; }
+    for (let i = 0; i < 40; i++) { clock.t += 0.02; desync(f, { yaw: 'jitter', jitter: 90 }); updateAgentVisual(f); if (Math.abs(f.body.upper.rotation.y - (f.yaw + Math.PI)) > 0.3) moved = true; }
     return [Math.abs(flat) < 1e-6 && moved, `0° holds the body still · 90° swings it`];
   })],
   ["anti-aim · pitch", () => stage(300, (h, f) => {
     const mild = { yaw: 'back', desyncAngle: 20, fakeduck: false };        // clear of the aaQuality cap
+    f.pitch = 0;                                                            // the body shows the REAL pitch when no fake is up, so level it first
     desync(f, { ...mild, pitch: 'zero' }); updateAgentVisual(f); const flat = f.body.upper.rotation.x, qz = aaQuality(f);
     desync(f, { ...mild, pitch: 'down' }); updateAgentVisual(f); const down = f.body.upper.rotation.x, qd = aaQuality(f);
     desync(f, { ...mild, pitch: 'up' }); updateAgentVisual(f); const up = f.body.upper.rotation.x;

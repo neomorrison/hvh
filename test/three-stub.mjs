@@ -54,6 +54,8 @@ export class Vector3 {
 export class Euler {
   constructor(x = 0, y = 0, z = 0, order = 'XYZ') { this.x = x; this.y = y; this.z = z; this.order = order; }
   set(x, y, z, order) { this.x = x; this.y = y; this.z = z; if (order) this.order = order; return this; }
+  copy(e) { return this.set(e.x, e.y, e.z, e.order); }
+  clone() { return new Euler(this.x, this.y, this.z, this.order); }
 }
 
 export class Quaternion {   // identity-ish: enough for models.js' post-mixer twist to run without throwing

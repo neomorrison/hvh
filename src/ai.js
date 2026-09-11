@@ -80,8 +80,13 @@ export function restoreAllEdges() {                            // round start: n
 // ledge/step, and if still wedged give up and repath.
 function botMove(a, dir, dt, combat, sepW) {
   const sep = separation(a);
-  const d = dir.clone().setY(0);
+  let d = dir.clone().setY(0);
   if (sep) d.add(sep.multiplyScalar(sepW != null ? sepW : SEP_FIGHT));
+  // ESCAPE: a wedged bot stops pushing at the obstacle and moves OFF it for a moment (sideways, then
+  // straight back), so the geometry it was grinding against is actually cleared before the new path
+  // is followed. Pushing harder at a table edge or a door frame was the whole "stuck in a corner".
+  if (a._escape && a._escape.until > clock.t) d = a._escape.dir.clone();
+  else a._escape = null;
   if (d.lengthSq() > 1e-4) d.normalize();
   const before = a.pos.clone();
   moveAgent(a, d, dt, combat);
@@ -99,7 +104,7 @@ function botMove(a, dir, dt, combat, sepW) {
     // the bot was stuck, so a single wedge on a door frame turned into continuous bunny-hopping in the
     // corner — which is what it looked like from the outside. A hop is an attempt to clear a ledge; if
     // it didn't work, the repath below is the answer, not hopping harder.
-    if (a.aiStuck > 0.35 && a.onGround && a._hopCd <= 0 && a.aiState !== "fight" && (a.speedScale == null || a.speedScale > 0.8)) {
+    if (a.aiStuck > 0.35 && a.onGround && a._hopCd <= 0 && (a.speedScale == null || a.speedScale > 0.8)) {
       a.vel.y = JUMP_VEL; a._hopCd = 0.9;
     }
     if (a.aiStuck > 0.7) {                                                            // genuinely wedged → unstick, even mid-fight
@@ -108,8 +113,20 @@ function botMove(a, dir, dt, combat, sepW) {
       // it and refuses to sever chain edges, so the graph can never fragment into a stalemate.
       if (a.aiPath && a.aiPath.length && !sep) pruneEdge(nearestNode(a.pos), a.aiPath[0]);
       a.aiPath = []; a.aiTimer = 0; a.aiStuck = 0; a._hopCd = 0.9;   // repathing is the fix — don't also hop at it
+      // escalate with every wedge in the same spot: sidestep → back straight off → relocate to the
+      // nearest reachable nav node (a wedge that survives two escapes is geometry the nav graph does
+      // not describe, and a bot that stands in it for the rest of the round is worse than a hop-out)
+      const recent = (clock.t - (a._wedgeT || -9)) < 4; a._wedgeN = recent ? (a._wedgeN || 0) + 1 : 1; a._wedgeT = clock.t;
+      const pl = Math.hypot(dir.z, dir.x) || 1, side = (Math.random() < 0.5 ? 1 : -1);
+      if (a._wedgeN === 1) a._escape = { dir: new THREE.Vector3(-dir.z / pl * side, 0, dir.x / pl * side), until: clock.t + 0.45 };
+      else if (a._wedgeN === 2) a._escape = { dir: new THREE.Vector3(-dir.x / pl, 0, -dir.z / pl), until: clock.t + 0.6 };
+      else {
+        let bestN = -1, bd = Infinity;
+        for (let i = 0; i < NODES.length; i++) { const p = NODES[i].p, dd = a.pos.distanceToSquared(p); if (dd > 40 * 40 && dd < bd && Math.abs(p.y - a.pos.y) < 40 && losClear(eyePos(a), p.clone().setY(p.y + 40))) { bd = dd; bestN = i; } }
+        if (bestN >= 0) { a.pos.x = NODES[bestN].p.x; a.pos.z = NODES[bestN].p.z; a.pos.y = NODES[bestN].p.y; a.vel.set(0, 0, 0); }
+        a._wedgeN = 0; a._escape = null;
+      }
       if (a.aiState !== "fight") a.yaw += (Math.random() - 0.5) * 1.5;                // roaming: spin to a new heading
-      else { const pl = Math.hypot(dir.z, dir.x) || 1, s = (Math.random() < 0.5 ? 1 : -1) * 2; a.pos.x += -dir.z / pl * s; a.pos.z += dir.x / pl * s; }   // mid-fight: tiny perpendicular sidestep off the corner (don't spin aim)
     }
   } else a.aiStuck = 0;
 }

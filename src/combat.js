@@ -10,7 +10,7 @@ import {
 } from './data.js';
 import { WALLS, segAABB, rayAABB, penetrate, losClear, collideMove, MAP_BOUNDS, CT_SPAWNS, T_SPAWNS } from './world.js';
 import { meshBackend } from './sourcemap.js';
-import { hitboxes, hitboxCenter, eyePos, setViewmodel } from './agents.js';
+import { hitboxes, hitboxCenter, eyePos, setViewmodel, vmKick, vmSwing, vmReload } from './agents.js';
 import { agents, clock } from './state.js';
 import { addTracer, addImpact, addShotLine } from './effects.js';
 import { hitmarker, playHitmarker, addHitLog, damageFlash, updateHUDWeapons, playShot, playBeep, showHint, addKillFeed } from './hud.js';
@@ -276,7 +276,9 @@ export function updateTickbase(a, dt) {
   if (a.hideFx > 0) a.hideFx -= dt;
   // the server catches up on an off-clock tickbase at real time, one tick per tick
   if (a.shiftUsed > 0) { a.shiftUsed = Math.max(0, a.shiftUsed - dt / TICK); if (a.shiftUsed === 0) a.shiftMode = null; }
-  a.shiftCharge = Math.min(SHIFT_MAX_TICKS, (a.shiftCharge || 0) + (dt / TICK) * SHIFT_REGEN);
+  // the tickbase only RECHARGES once you have stopped shooting — the server can't be handed back
+  // ticks while you are still in a fight; a double tap in the open recomps when you are safe again
+  if (performance.now() - (a.lastShot || 0) > 600) a.shiftCharge = Math.min(SHIFT_MAX_TICKS, (a.shiftCharge || 0) + (dt / TICK) * SHIFT_REGEN);
   const aa = a.cheats.antiaim;
   if (!aa || !aa.on || !aa.desync) return;
   a._sideT = (a._sideT || 0) - dt;
@@ -361,17 +363,19 @@ export function resolveDesync(shooter, target) {
   if (!target._desyncOff) return true;                         // no fake up — nothing to resolve
   const R = shooter.cheats.resolver || {};
   if (!R.on) return false;                                     // resolver off → the desync always wins
-  const strength = R.strength != null ? R.strength : 0.6;
+  const strength = R.strength != null ? R.strength : 0.8;
   const mode = R.mode || "animation";
   const fresh = target._lastExpose != null
-    && (clock.t - target._lastExpose) < (R.memory != null ? R.memory : 0.55)
+    && (clock.t - target._lastExpose) < (R.memory != null ? R.memory : 1.0)
     && target._lastExpose >= (target._sideStamp || 0);         // the side hasn't re-rolled since the read
   const b = mode === "brute" ? bruteRead(shooter, target) : null;
   let p;
   if (fresh) p = strength + (1 - strength) * (mode === "onshot" ? 0.85 : 0.75);
   else {
-    p = strength * (1 - aaQuality(target));
-    if (mode === "brute") p = Math.min(0.9, p * 0.85 + b.n * 0.09);   // starts worse, converges
+    // the anti-aim degrades the guess, but a resolver still has the animation layers, the eye
+    // angles and the last known real yaw to work from — it is never reduced to a coin flip
+    p = strength * (1 - aaQuality(target) * 0.6);
+    if (mode === "brute") p = Math.min(0.95, p * 0.85 + b.n * 0.12);   // starts worse, converges faster
     else if (mode === "onshot") p *= 0.5;                             // blind between exposures
   }
   const ok = Math.random() < p;
@@ -387,21 +391,28 @@ export function resolveDesync(shooter, target) {
    of the bullet instead of a formula that happens to live next to it. */
 const TAU = Math.PI * 2;
 const _crRight = new THREE.Vector3(), _crUp = new THREE.Vector3(), _crTmp = new THREE.Vector3();
-export function coneRay(dir, cone, r01, phi, out) {
+/* THE ENGINE'S BULLET: dir + x·cone·right + y·cone·up, where x and y are each the sum of two
+   uniform(-0.5, 0.5) rolls (a triangular distribution over [-1, 1] — dense at the centre, thin at the
+   rim). `x`, `y` are those offsets in [-1, 1]; the pair is folded onto the unit disc so a round never
+   leaves the circle the HUD draws for the cone. */
+export function coneRay(dir, cone, x, y, out) {
   const o = (out || new THREE.Vector3()).copy(dir);
-  if (!(cone > 0) || !(r01 > 0)) return o;
+  if (!(cone > 0)) return o;
   _crTmp.set(0, 1, 0); if (Math.abs(dir.y) > 0.99) _crTmp.set(1, 0, 0);
   _crRight.crossVectors(dir, _crTmp).normalize();
   _crUp.crossVectors(_crRight, dir).normalize();
-  const rad = cone * r01;                                     // small-angle: adding rad then renormalising IS an angle of ~rad
-  return o.addScaledVector(_crRight, Math.cos(phi) * rad).addScaledVector(_crUp, Math.sin(phi) * rad).normalize();
+  const r = Math.hypot(x, y); if (r > 1) { x /= r; y /= r; }
+  return o.addScaledVector(_crRight, x * cone).addScaledVector(_crUp, y * cone).normalize();   // small-angle: cone is a tangent
 }
+/* one engine roll: (u1 - 0.5) + (u2 - 0.5) */
+export const triRoll = () => (Math.random() - 0.5) + (Math.random() - 0.5);
+const triInv = u => (u < 0.5 ? Math.sqrt(2 * u) - 1 : 1 - Math.sqrt(2 * (1 - u)));   // inverse CDF of that triangle
 
 /* The estimator walks a fixed set of quantiles of that same distribution instead of rolling dice, so
    the number doesn't shimmer frame to frame: radius (i+½)/N spans the uniform variate evenly and the
    golden angle keeps the directions from lining up into spokes. */
-const HC_N = 32, _hcR = new Float64Array(HC_N), _hcPhi = new Float64Array(HC_N);
-for (let i = 0; i < HC_N; i++) { _hcR[i] = (i + 0.5) / HC_N; _hcPhi[i] = i * Math.PI * (3 - Math.sqrt(5)); }
+const HC_N = 32, _hcR = new Float64Array(HC_N), _hcPhi = new Float64Array(HC_N);   // (x, y) quantiles of the engine's triangular roll, spread with the golden ratio so they never line up
+for (let i = 0; i < HC_N; i++) { _hcR[i] = triInv((i + 0.5) / HC_N); _hcPhi[i] = triInv((i * 0.6180339887498949) % 1); }
 const _hcDir = new THREE.Vector3(), _hcRay = new THREE.Vector3();
 
 /* Hit chance = the fraction of the spread cone that actually lands on the hitbox being aimed at,
@@ -544,6 +555,12 @@ function selectShot(a) {
   // hitboxes is a shot at where nobody is, which is what the old signature quietly asked for.
   const accOf = (x, body) => (x.group ? computeAccuracy(a, x.aimPoint, body, x.group, x.exposure) : 0);
   let best = evalShot(a, tgt, tgt, order, cb, cfg), bestBody = tgt, bestAcc = accOf(best, tgt), bestAge = 0, bestRec = null;
+  // FORCE BAIM: the pelvis is the box a desync moves least, the chest is the bigger one — take whichever
+  // this cone actually lands on more, so body aim is the MORE accurate choice it is meant to be
+  if (cb.aimbot.forceBody && best.group === "stomach") {
+    const alt = evalShot(a, tgt, tgt, ["chest"], cb, cfg);
+    if (alt.group) { const acc = accOf(alt, tgt); if (acc > bestAcc) { best = alt; bestAcc = acc; } }
+  }
   // BACKTRACK — only when the live shot isn't already good enough. A peeker who is behind cover NOW
   // was standing in the open a few ticks ago; the server still accepts a hit on that tick.
   // ...but only when rewinding can actually change the answer: the live shot has to be failing AND the
@@ -687,6 +704,7 @@ export function fireWeaponCommon(a) {
   if (a.cur === "r8" && a.fireMode === "fan") a.firePenalty = (a.firePenalty || 0) + 30;
   onShotFired(a);          // pins the real angles for a moment — unless hide shots pays for it
   sfxFire(a);
+  vmKick(a, w.scope ? 1.5 : a.cur === "r8" || a.cur === "deagle" ? 1.2 : w.auto ? 0.55 : 0.8);   // recoil animation (viewmodel + the third-person gun)
 }
 
 export function hasAnyAmmo(a) { for (const k of [a.slotPrimary, a.slotSecondary]) { if (k && a.weapons[k] && ((a.weapons[k].ammo || 0) > 0 || (a.weapons[k].reserve || 0) > 0)) return true; } return false; }
@@ -699,7 +717,7 @@ export function manualFire(a) {
   const dir = new THREE.Vector3(0, 0, -1).applyEuler(new THREE.Euler(a.pitch, a.yaw, 0, 'YXZ'));
   let spread = computeBloom(a);
   if (a.cur === "r8" && a.fireMode === "fan") spread += 0.06;
-  coneRay(dir, spread, Math.random(), Math.random() * TAU, dir);    // same cone the hit-chance estimate samples
+  coneRay(dir, spread, triRoll(), triRoll(), dir);    // the engine's roll, in the same cone the hit-chance estimate samples
 
   if (meshBackend.active) { const brk = meshBackend.breakWindowsAlong(origin.x, origin.y, origin.z, dir.x, dir.y, dir.z, 9000); if (brk && brk.center) sfxImpact(brk.center, true); }   // shatter glass in the line of fire
   // nearest enemy hitbox along the ray (walls accounted for afterwards via penetration)
@@ -779,11 +797,15 @@ export function aimbotFire(a) {
       const off = cs.tgt._desyncOff, swing = DESYNC_SWING[cs.group] != null ? DESYNC_SWING[cs.group] : 1;
       // the sideways fake is a rotation, so it scales with the lever; a fake DUCK is a real vertical
       // shift of the whole body, so that part is off by its full amount whichever box you picked
-      aimAt = cs.aimPoint.clone(); aimAt.x += off.x * swing; aimAt.z += off.z * swing; aimAt.y += off.y;
+      // ...except that a fake duck is read from the animation (the legs fold, the eye drops) far more
+      // reliably than a yaw is — an enabled resolver almost always gets the HEIGHT right even when it
+      // loses the side, so the vertical miss only happens on the rare double loss
+      const duckSeen = (a.cheats.resolver && a.cheats.resolver.on) ? Math.random() < 0.85 : false;
+      aimAt = cs.aimPoint.clone(); aimAt.x += off.x * swing; aimAt.z += off.z * swing; if (!duckSeen) aimAt.y += off.y;
       lostRead = true;
     }
     const dirAim = aimAt === cs.aimPoint ? dirTo : aimAt.clone().sub(me).normalize();
-    const dir = coneRay(dirAim, cone, Math.random(), Math.random() * TAU, new THREE.Vector3());
+    const dir = coneRay(dirAim, cone, triRoll(), triRoll(), new THREE.Vector3());
     const hit = traceHitbox(me, dir, body);
     // a bullet that strays into the cover we were peeking past is stopped by it, exactly as the
     // exposure term in the hit chance said it might be
@@ -844,7 +866,7 @@ export function meleeAttack(a, stab, auto) {
   // cooldown burned and NO sound when whiffing empty air. This is what stops the stab-sound loop.
   if (auto && !best) return false;
   a.fireCd = stab ? w.stabCd : w.slashCd; a.lastShot = performance.now();
-  if (a.isHuman) sfxKnife(a, false);   // local swing (manual whiff still sounds; auto only reaches here with a target)
+  if (a.isHuman) { sfxKnife(a, false); vmSwing(a, stab); }   // local swing (manual whiff still sounds; auto only reaches here with a target)
   if (!best) return false;
   const tf = new THREE.Vector3(-Math.sin(best.realYaw || best.yaw), 0, -Math.cos(best.realYaw || best.yaw));
   const toAtk = a.pos.clone().sub(best.pos).setY(0).normalize();
@@ -876,6 +898,7 @@ export function startReload(a) {
   a.reloadT = w.reload; a.reloadTotal = w.reload; a.scoped = false;
   a._reloadFor = a.cur;
   sfxReloadStart(a);
+  vmReload(a, w.reload);   // viewmodel dips away and comes back over the reload
 }
 export function finishReload(a) {
   const key = a._reloadFor; const w = WEAPONS[key], wp = a.weapons[key]; if (!wp) return;

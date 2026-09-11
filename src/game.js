@@ -13,6 +13,7 @@ import { meshBackend } from './sourcemap.js';
 import { clearEffects, addExplosion, smokes, fires, nadeProjectiles } from './effects.js';
 import { sfxNade, sfxEquip } from './sfx.js';
 import { nadeMeshGLB } from './models.js';
+import { practiceArm, practiceSpawnOf } from './practice.js';
 import { centerMessage, showHint, updateAllHUD, updateHUDWeapons, addKillFeedText, damageFlash, doFlash, playBeep } from './hud.js';
 
 const $ = s => document.querySelector(s);
@@ -25,8 +26,13 @@ export function buildTeams() {
   refs.human = spawnAgent(t1, true, "you");
   const deck = BOT_PERSONAS.slice(); for (let i = deck.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [deck[i], deck[j]] = [deck[j], deck[i]]; }
   let pi = 0;
-  for (let i = 0; i < 11; i++) { const b = spawnAgent(t1, false, "bot"); applyPersona(b, deck[(pi++) % deck.length]); }   // human + 11 = 12
-  for (let i = 0; i < 12; i++) { const b = spawnAgent(t2, false, "bot"); applyPersona(b, deck[(pi++) % deck.length]); }   // 12
+  const n = Math.max(1, Math.min(12, GAME.botsPerTeam || 12));   // bots per team from the PLAY screen (up to 12 v 12)
+  if (GAME.practice) {                                            // config range: enemy targets only (+ the armed guard), no teammates
+    for (let i = 0; i < 8; i++) { const b = spawnAgent(t2, false, "bot"); applyPersona(b, deck[(pi++) % deck.length]); }   // 6 targets + the anti-aimer + the fighter (practice.js roles)
+    return;
+  }
+  for (let i = 0; i < n - 1; i++) { const b = spawnAgent(t1, false, "bot"); applyPersona(b, deck[(pi++) % deck.length]); }   // human + (n-1) = n
+  for (let i = 0; i < n; i++) { const b = spawnAgent(t2, false, "bot"); applyPersona(b, deck[(pi++) % deck.length]); }       // n
 }
 export function liveHostages() { return GAME.hostages.filter(h => !h.rescued && !h.dead); }
 
@@ -47,6 +53,14 @@ export function startRound() {
     grp.position.copy(p); scene.add(grp);
     return { pos: p.clone(), mesh: grp, rescued: false, dead: false, carrier: null, id: i };
   });
+  if (GAME.practice) {   // config range: no rounds — live at once, forever; targets unarmed, guard armed, you get a pistol and infinite money
+    let gi = 0;
+    for (const a of agents) { if (a.isHuman) continue; resetAgentForRound(a, practiceSpawnOf(a)); practiceArm(a); }   // each bot to its room's spot (updatePractice despawns the rooms you are not in)
+    const h = refs.human; h.money = 16000; if (!h.slotSecondary) { giveWeapon(h, "usp"); h.cur = "usp"; }
+    GAME.phase = "live"; GAME.freeze = 0; GAME.timer = 1e9; GAME.buyTimer = 1e9;
+    updateAllHUD(); centerMessage("AIM PRACTICE", "targets respawn · B to buy anything · guard in the east lane fires back", 2.2);
+    return;
+  }
   agents.forEach(a => { if (!a.isHuman) botBuy(a); });
   updateAllHUD();
   centerMessage("BUY PHASE", "Press B to buy · Round " + GAME.round, 1.6);
@@ -101,7 +115,7 @@ function reasonText(side, reason) {
 }
 
 export function checkRoundEnd() {
-  if (GAME.phase !== "live") return;
+  if (GAME.phase !== "live" || GAME.practice) return;   // the config range never ends a round
   const ctAlive = agents.some(a => a.team === TEAM.CT && a.alive);
   const tAlive = agents.some(a => a.team === TEAM.T && a.alive);
   if (!ctAlive) { awardWin(TEAM.T, "elim"); return; }
@@ -219,7 +233,7 @@ export function refreshBuyAfford() {
     el.classList.toggle("cant", !afford);
   });
 }
-export function canBuyNow() { return GAME.buyTimer > 0 && (GAME.phase === "buy" || GAME.phase === "live"); }
+export function canBuyNow() { return GAME.practice || (GAME.buyTimer > 0 && (GAME.phase === "buy" || GAME.phase === "live")); }
 export function sellItem(it) {                              // right-click a weapon bought this buy to sell it back
   const human = refs.human;
   if (!canBuyNow() || !it || it.type !== "w") return;
@@ -346,4 +360,4 @@ export function updateAreas(dt) {
 }
 
 /* spectate on death */
-export function onHumanDeath() { centerMessage("YOU DIED", "Spectating — next round soon", 2); $("#scopeOverlay").style.display = "none"; refs.human.scoped = false; }
+export function onHumanDeath() { centerMessage("YOU DIED", GAME.practice ? "respawning in this room…" : "Spectating — next round soon", 2); $("#scopeOverlay").style.display = "none"; refs.human.scoped = false; }

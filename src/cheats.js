@@ -36,6 +36,42 @@ const ICONS = {
    gun's overrides of them. UI state only — nothing here is saved with the config. */
 const WEP_KEYS = Object.keys(WEAPONS).filter(k => !WEAPONS[k].melee);
 let selWeapon = "global";
+/* The selector defaults to the gun in your hands (knife/nade → the master) whenever the menu opens or
+   you switch weapons while it is open; the drop-down still lets you edit any other gun meanwhile. */
+export function syncWeaponSel() {
+  const h = refs.human; if (!h) return;
+  const want = (h.cur && WEP_KEYS.includes(h.cur)) ? h.cur : "global";
+  if (want === selWeapon) return;
+  selWeapon = want;
+  if ($("#cheatPanel") && $("#cheatPanel").classList.contains("show")) buildCheatMenu();
+}
+
+/* THE OPTIMISED DEFAULT — every value chosen from how this game's own maths scores it, not taste:
+   · min hit chance 55: the gate only DELAYS a shot below it; a miss costs the next round its fire
+     penalty, so ~55 maximises damage-per-second across the weapon set (snipers/deagle/R8 pinned
+     higher — one round, one kill — pistols lower, they spray to trade).
+   · baim-if-lethal + safepoint: a body shot on a desyncer lands whether or not the resolver read the
+     side (DESYNC_SWING), so once the body kills there is no reason to bet on the head.
+   · resolver brute: starts at ~0.46 vs the hardest anti-aim and converges to 0.95 across repeated
+     shots at the same target — better than animation after the second round.
+   · anti-aim jitter 58° + 58° desync + pitch down + fake duck + freestanding: the highest aaQuality
+     the resolver model scores (0.55), and freestanding puts the fake on the side they can shoot.
+   · full backtrack + hide shots + double tap: the whole tickbase edge; double tap wins the conflict.
+   · autowall min damage 25: below that a wallbang is a giveaway, not a kill. */
+export function optimizedCheats() {
+  const c = defaultCheats(true);
+  Object.assign(c.aimbot, { on: true, fov: 180, hitchance: 55, minDmg: 20, silent: true, autoShoot: true, autoScope: true, autoStop: true, autoKnife: true, autoRevolver: true,
+    target: "distance", priority: "head", forceBody: false, baimLethal: true, safepoint: true,
+    weapons: { ssg: { hitchance: 70, minDmg: 60, priority: "head" }, scar: { hitchance: 65, minDmg: 45, priority: "head" }, g3: { hitchance: 65, minDmg: 45, priority: "head" },
+               deagle: { hitchance: 60, minDmg: 30, priority: "head" }, r8: { hitchance: 70, minDmg: 50, priority: "head" },
+               glock: { hitchance: 45, minDmg: 12, priority: "chest" }, usp: { hitchance: 45, minDmg: 12, priority: "chest" }, duals: { hitchance: 40, minDmg: 12, priority: "chest" } } });
+  Object.assign(c.autowall, { on: true, minDmg: 25 });
+  Object.assign(c.resolver, { on: true, mode: "brute", strength: 0.8, memory: 1.0 });
+  Object.assign(c.antiaim, { on: true, yaw: "jitter", jitter: 58, pitch: "down", desync: true, desyncAngle: 58, mode: "freestanding", fakeduck: true, fakeduckMode: "hold" });
+  Object.assign(c.tickbase, { backtrack: MAX_BACKTRACK_TICKS, hideShots: true, doubleTap: true });
+  Object.assign(c.visuals, { esp: true, boxes: true, health: true, name: true, chams: true, hitchance: true, backtrackGhost: true });
+  return c;
+}
 
 /* which tab is open survives a rebuild — toggling a switch that rebuilds the menu
    must not throw you back to the first tab */
@@ -69,8 +105,8 @@ function tabs() {
       { title: "Resolver", rows: [
         sw("Resolver enabled", () => c.resolver.on, v => c.resolver.on = v),
         sel("Mode", ["animation", "brute", "onshot"], () => c.resolver.mode || "animation", v => c.resolver.mode = v, true),
-        rng("Strength", 0, 100, () => Math.round((c.resolver.strength != null ? c.resolver.strength : 0.6) * 100), v => c.resolver.strength = v / 100, v => v + "%", true),
-        rng("Shot memory", 0, 150, () => Math.round((c.resolver.memory != null ? c.resolver.memory : 0.55) * 100), v => c.resolver.memory = v / 100, v => (v / 100).toFixed(2) + "s", true),
+        rng("Strength", 0, 100, () => Math.round((c.resolver.strength != null ? c.resolver.strength : 0.8) * 100), v => c.resolver.strength = v / 100, v => v + "%", true),
+        rng("Shot memory", 0, 150, () => Math.round((c.resolver.memory != null ? c.resolver.memory : 1.0) * 100), v => c.resolver.memory = v / 100, v => (v / 100).toFixed(2) + "s", true),
         note(`Strength is a <b>ceiling, not an answer</b>. An enemy who fires without hiding the shot pins their real ` +
              `angles and hands you the read for <b>shot memory</b> seconds — until their desync side re-rolls. With no ` +
              `read the resolver guesses, and their anti-aim cuts the guess down. ` +
@@ -84,6 +120,7 @@ function tabs() {
         sel("Yaw", ["back", "sideways", "spin", "jitter", "sway", "rand"], () => c.antiaim.yaw, v => c.antiaim.yaw = v, true),
         rng("Jitter / sway range", 0, 180, () => c.antiaim.jitter, v => c.antiaim.jitter = v, v => v + "°", true),
         sel("Pitch", ["down", "up", "zero"], () => c.antiaim.pitch, v => c.antiaim.pitch = v, true),
+        rng("Yaw offset", -180, 180, () => c.antiaim.yawOffset || 0, v => c.antiaim.yawOffset = v, v => v + "°", true),
       ] },
       { title: "Desync", rows: [
         sw("Desync", () => c.antiaim.desync, v => c.antiaim.desync = v),
@@ -92,6 +129,7 @@ function tabs() {
         sw("Fake duck", () => c.antiaim.fakeduck, v => c.antiaim.fakeduck = v, null, true),
         keybind("Fake duck key", () => c.antiaim.fakeduckKey || "KeyX", v => c.antiaim.fakeduckKey = v, true),
         sel("Fake duck mode", ["hold", "toggle"], () => c.antiaim.fakeduckMode || "hold", v => c.antiaim.fakeduckMode = v, true),
+        sw("Moonwalk (legs animate backwards while you move)", () => !!c.antiaim.moonwalk, v => c.antiaim.moonwalk = v),
         note(`The desync angle is the fake body's offset made geometry — 0° really is no fake at all now, and 58° swings ` +
              `it about a body's width off you. <b>freestanding</b> looks at the map and puts the fake where the nearest ` +
              `enemy can see it, leaving the real you behind the corner, so an un-resolved shot goes into the wall. ` +
@@ -143,6 +181,15 @@ function tabs() {
              `walls and faded out over the duration above. A tracer is gone in 0.2s; this is the one you can still look ` +
              `at afterwards to see whether a shot was spread, a backtrack, or the resolver losing to a desync.`),
       ] },
+      { title: "World & view", rows: [
+        sw("Night mode", () => !!c.visuals.nightMode, v => c.visuals.nightMode = v),
+        rng("Darkness", 10, 100, () => c.visuals.nightLevel != null ? c.visuals.nightLevel : 70, v => c.visuals.nightLevel = v, v => v + "%", true),
+        rng("Field of view", 60, 120, () => c.visuals.fov || 74, v => c.visuals.fov = v, v => v + "°"),
+        rng("Viewmodel X", -60, 60, () => c.visuals.vmX || 0, v => c.visuals.vmX = v, v => (v / 10).toFixed(1), true),
+        rng("Viewmodel Y", -60, 60, () => c.visuals.vmY || 0, v => c.visuals.vmY = v, v => (v / 10).toFixed(1), true),
+        rng("Viewmodel Z", -80, 80, () => c.visuals.vmZ || 0, v => c.visuals.vmZ = v, v => (v / 10).toFixed(1), true),
+        sw("No visual recoil (viewmodel stays still)", () => !!c.visuals.noRecoilAnim, v => c.visuals.noRecoilAnim = v, null, true),
+      ] },
       { title: "Debug", rows: [
         sw("Hit chance indicator", () => c.visuals.hitchance, v => c.visuals.hitchance = v),
         sw("Desync ghost model (local)", () => c.visuals.desyncGhost, v => c.visuals.desyncGhost = v),
@@ -156,8 +203,12 @@ function tabs() {
           ["💾 Save config", () => { saveConfig(); showHint("Config saved"); }],
           ["📂 Load config", () => { if (loadConfig()) { buildCheatMenu(); showHint("Config loaded"); } else showHint("No saved config"); }],
           ["↺ Reset", () => { refs.human.cheats = defaultCheats(false); buildCheatMenu(); showHint("Cheats reset"); }],
+          ["⚡ Optimized default", () => { refs.human.cheats = optimizedCheats(); buildCheatMenu(); updateHUDWeapons(); showHint("Optimized config loaded — save it to keep it"); }],
         ]),
-        note(`Saved to this browser (localStorage, with a cookie fallback) and loaded automatically on boot.`),
+        note(`Saved to this browser (localStorage, with a cookie fallback) and loaded automatically on boot. ` +
+             `<b>Optimized default</b> is the config the game's own maths scores best: 55% master hit chance (snipers/Deagle/R8 ` +
+             `pinned higher, pistols lower), baim-if-lethal + safepoint, brute resolver, 58° jitter + 58° desync + fake duck ` +
+             `+ freestanding, full backtrack, hide shots, double tap, autowall at 25 damage.`),
       ] },
       { title: "Keys", rows: [
         note(`<b>F1</b> aimbot · <b>F2</b> body aim · <b>F3</b> triggerbot · <b>F4</b> autowall · <b>F5</b> anti-aim · ` +
@@ -323,7 +374,7 @@ function btns(defs) {
 export function toggleCheatMenu(force) {
   const p = $("#cheatPanel"); const show = force !== undefined ? force : !p.classList.contains("show");
   p.classList.toggle("show", show);
-  if (show) document.exitPointerLock(); else if (GAME.phase !== "warmup" && GAME.phase !== "editor") renderer.domElement.requestPointerLock();
+  if (show) { syncWeaponSel(); document.exitPointerLock(); } else if (GAME.phase !== "warmup" && GAME.phase !== "editor") renderer.domElement.requestPointerLock();
 }
 export function syncCheatUI() { document.querySelectorAll("#cheatBody .crow").forEach(r => r._sync && r._sync()); }
 

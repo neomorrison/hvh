@@ -8,6 +8,7 @@ import { TEAM, WEAPONS, ECON, EYE_STAND, EYE_CROUCH, MAX_BACKTRACK_TICKS, SHIFT_
 import { agents, refs, vm, clock, GAME } from './state.js';
 import { losClear } from './world.js';
 import { makeBodyGLB, updateBodyGLB, buildWeaponModelGLB } from './models.js';
+import { fakeDucking } from './combat.js';   // (cycle with combat.js is function-level only)
 
 export function makeBody(team, isHuman) {
   const glb = makeBodyGLB(team, isHuman); if (glb) return glb;   // rigged Blender model when models/player.glb is loaded
@@ -106,6 +107,36 @@ export function setViewmodel(key, isNade) {
   const m = isNade ? buildNadeModel() : buildWeaponModel(key);
   m.scale.setScalar(0.45); m.position.set(7, -7, -20); m.rotation.set(0.04, Math.PI + 0.16, 0.04);
   camera.add(m); vm.current = m;
+  vm.base = { p: m.position.clone(), r: m.rotation.clone() }; vm.kick = 0; vm.swing = 0; vm.reload = 0; vm.reloadDur = 0; vm.isKnife = !!(WEAPONS[key] && WEAPONS[key].melee);
+}
+/* ---- viewmodel animation (procedural, no clips needed) ----
+   kick: the gun jumps back and up on every shot and settles; swing: the knife slashes across;
+   reload: the gun dips out of view, tilts, and comes back over the reload time. Third-person bodies get
+   the same kick on their gun pivot (body.kick, see updateBodyGLB). */
+export function vmKick(a, strength = 1) { if (a && a.body && a.body.glb) a.body.kick = Math.min(1, (a.body.kick || 0) + 0.6 * strength); if (a && a.isHuman && !(a.cheats.visuals && a.cheats.visuals.noRecoilAnim)) vm.kick = Math.min(1.5, (vm.kick || 0) + strength); }
+export function vmSwing(a, stab) { if (a && a.isHuman) { vm.swing = 1; vm.swingStab = !!stab; } }
+export function vmReload(a, dur) { if (a && a.isHuman) { vm.reload = 1; vm.reloadDur = Math.max(0.3, dur || 1); } }
+export function updateViewmodel() {
+  const now = performance.now(), dt = Math.min(0.05, (now - (vm._t || now)) / 1000); vm._t = now;
+  const m = vm.current; if (!m || !vm.base) return;
+  const b = vm.base, vz = (refs.human && refs.human.cheats.visuals) || {};
+  m.position.copy(b.p); m.rotation.copy(b.r);
+  m.position.x += (vz.vmX || 0) * 0.1; m.position.y += (vz.vmY || 0) * 0.1; m.position.z += (vz.vmZ || 0) * 0.1;   // viewmodel offset sliders (tenths of a unit)
+  if (vm.kick > 0) {                                      // recoil: back + up, fast in, exponential settle
+    const k = vm.kick; m.position.z += 2.2 * k; m.position.y += 0.6 * k; m.rotation.x += 0.09 * k; m.rotation.z += 0.02 * k;
+    vm.kick = Math.max(0, k - dt * 7);
+  }
+  if (vm.swing > 0) {                                     // knife: a slash sweeps right-to-left and down (stab: straight in)
+    const t = 1 - vm.swing, s = Math.sin(t * Math.PI);
+    if (vm.swingStab) { m.position.z -= 9 * s; m.rotation.x += 0.15 * s; }
+    else { m.rotation.y += 0.9 * s; m.rotation.z -= 0.7 * s; m.position.x -= 5 * s; m.position.y -= 1.5 * s; }
+    vm.swing = Math.max(0, vm.swing - dt / 0.28);
+  }
+  if (vm.reload > 0) {                                    // reload: dip + roll away, then back up for the last third
+    const t = 1 - vm.reload, s = t < 0.25 ? t / 0.25 : t > 0.7 ? (1 - t) / 0.3 : 1;
+    m.position.y -= 7 * s; m.rotation.x -= 0.45 * s; m.rotation.z += 0.35 * s;
+    vm.reload = Math.max(0, vm.reload - dt / vm.reloadDur);
+  }
 }
 
 export function defaultCheats(aggressive) {
@@ -122,17 +153,18 @@ export function defaultCheats(aggressive) {
     autowall: { on: aggressive, minDmg: 30 },
     // strength is the resolver's ceiling, not its answer — see resolveDesync(): a target's anti-aim
     // cuts it, and only an enemy who fires without hiding the shot gives a read worth `memory` seconds.
-    resolver: { on: aggressive, mode: "animation", strength: 0.6, memory: 0.55 },
+    resolver: { on: aggressive, mode: "animation", strength: 0.8, memory: 1.0 },
     // fake duck is a BIND, not a state: enabling it here only arms it, and it engages while the key is
     // held (or between presses in toggle mode). It forces a real crouch, so leaving it permanently on
     // would leave you walking at a third speed with no way to stand up.
     antiaim: { on: aggressive, yaw: "jitter", jitter: 55, pitch: "down", desync: true, desyncAngle: 58, mode: "freestanding",
-      fakeduck: false, fakeduckKey: "KeyX", fakeduckMode: "hold" },
+      fakeduck: false, fakeduckKey: "KeyX", fakeduckMode: "hold", moonwalk: false, yawOffset: 0 },
     // backtrack is in TICKS (12 tk @64 = 187ms). doubleTap and hideShots shift the tickbase in opposite
     // directions, so only one can apply to a given shot — double tap wins when both are on.
     tickbase: { backtrack: aggressive ? 12 : 0, hideShots: aggressive, doubleTap: false },
     visuals: { esp: false, boxes: true, health: true, name: true, distance: false, snaplines: false, chams: false, desyncGhost: false, backtrackTrail: false, backtrackGhost: false, chamsVisible: '#ff2a44', chamsOccluded: '#7a4cff',
-      shotLines: true, shotLineTime: 1.5, shotLineHit: '#ff4d6d', shotLineMiss: '#4dc3ff', hitchance: false },
+      shotLines: true, shotLineTime: 1.5, shotLineHit: '#ff4d6d', shotLineMiss: '#4dc3ff', hitchance: false,
+      nightMode: false, nightLevel: 70, fov: 74, vmX: 0, vmY: 0, vmZ: 0, noRecoilAnim: false },
   };
 }
 
@@ -266,7 +298,9 @@ export function updateAgentVisual(a) {
     else applyChams(a, false);
   }
   a.body.g.position.set(a.pos.x, a.pos.y, a.pos.z);
-  if (!a.body.glb) a.body.legs.rotation.y = a.realYaw || a.yaw;   // GLB: the Hips bone gets it after the mixer (updateBodyGLB)
+  // FACING: rotation.y = yaw points a model's +Z at (sin, 0, cos) — the opposite of the view vector
+  // (-sin, 0, -cos) — and the box body is built face-forward on +Z, so every body yaw carries a half turn
+  if (!a.body.glb) a.body.legs.rotation.y = (a.realYaw || a.yaw) + Math.PI;   // GLB: the Hips pivot gets it after the mixer (updateBodyGLB)
   let upperYaw = a.yaw;
   const jit = (aa.jitter != null ? aa.jitter : 55) * Math.PI / 180;
   if (aa.on && !(a.exposeT > 0)) {          // exposed by an un-hidden shot → the body snaps to the real angle
@@ -279,21 +313,27 @@ export function updateAgentVisual(a) {
     else if (aa.yaw === "sway") upperYaw = a.yaw + Math.PI + Math.sin(clock.t * 2.6 + a.pos.z * 0.01) * jit;
     else if (aa.yaw === "rand") upperYaw = a.yaw + (a._randYaw || 0);   // re-rolled on the desync side cadence
   }
-  const aimP = aa.on ? (aa.pitch === "down" ? 0.5 : aa.pitch === "up" ? -0.5 : 0) : 0;
+  if (aa.on && aa.yawOffset) upperYaw += aa.yawOffset * Math.PI / 180;   // yaw offset: turn the torso a fixed amount off whatever the mode says (180 = back to them)
+  // SHOWN PITCH — where the head, torso and gun look: your real view pitch (up = +) unless anti-aim fakes
+  // one, in which case the model looks all the way at the floor / ceiling, not a polite 12° nod
+  const shownPitch = aa.on && aa.pitch === "down" ? -1.25 : aa.on && aa.pitch === "up" ? 1.25 : (a.pitch || 0);
   // fake duck renders the stance you are NOT in, so a human aiming at the model is aiming at the fake
   // (the hitboxes an aimbot reads stay on the real one — that half is the desync offset's job)
-  const shown = (aa.on && aa.fakeduck && !(a.exposeT > 0)) ? !a.crouch : a.crouch;
+  const shown = (fakeDucking(a) && !(a.exposeT > 0)) ? !a.crouch : a.crouch;   // only WHILE fake ducking — merely arming it must not invert the stance
   if (a.body.glb) {   // rigged GLB: stance/walk/run come from the clips; anti-aim is composed onto the bones after the mixer runs
-    const b = a.body; b.realYaw = a.realYaw || a.yaw; b.aimYaw = upperYaw; b.lean = aimP * 0.4; b.pitch = a.pitch; b.crouchShown = shown;
+    const b = a.body; b.realYaw = a.realYaw || a.yaw; b.aimYaw = upperYaw; b.pitch = shownPitch; b.crouchShown = shown;
     const dt = Math.min(0.05, Math.max(0, clock.t - (a._visT == null ? clock.t : a._visT))); a._visT = clock.t; updateBodyGLB(a, dt);
   } else {
-    a.body.upper.rotation.y = upperYaw; a.body.upper.rotation.x = aimP * 0.4;
+    a.body.upper.rotation.y = upperYaw + Math.PI; a.body.upper.rotation.x = -shownPitch * 0.35;   // box torso tips with the shown pitch (looking down = positive x here)
     const sc = shown ? 0.72 : 1; a.body.upper.position.y = shown ? 44 - 12 : 44; a.body.legs.scale.y = sc;   // 44 = waist pivot (see body build)
   }
-  if (a._wmKey !== a.cur) {
+  if (a.unarmed) { if (a.body.weapon) { a.body.holder.remove(a.body.weapon); a.body.weapon = null; a._wmKey = null; } }   // practice targets carry nothing
+  else if (a._wmKey !== a.cur) {
     a._wmKey = a.cur;
-    if (a.body.weapon) a.body.holder.remove(a.body.weapon);
-    a.body.weapon = buildWeaponModel(a.cur); a.body.weapon.scale.setScalar(1.0); a.body.holder.add(a.body.weapon);
+    if (a.body.weapon) { a.body.holder.remove(a.body.weapon); if (a.body.handHolder) a.body.handHolder.remove(a.body.weapon); }
+    // a gun mounts on the chest pivot (aim pose); a knife goes in the right hand with the arms relaxed
+    const melee = !!(WEAPONS[a.cur] && WEAPONS[a.cur].melee), mount = (melee && a.body.handHolder) ? a.body.handHolder : a.body.holder;
+    a.body.weapon = buildWeaponModel(a.cur); a.body.weapon.scale.setScalar(1.0); mount.add(a.body.weapon); a.body.knifeOut = melee && !!a.body.handHolder;
   }
   if (!a.body.glb) a.body.holder.rotation.x = -a.pitch;   // GLB: holder is re-aimed from the hand bone in updateBodyGLB
 }
