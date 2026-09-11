@@ -355,7 +355,7 @@ export function step(dt, extra) {
   for (const a of agents) {
     if (a.isHuman) continue;
     if (GAME.phase === "buy") a.body.g.position.copy(a.pos);
-    else if (canAct) { if (a.practiceTarget || a.practiceGuard) practiceThink(a, dt); else botThink(a, dt); }
+    else if (canAct) { if (GAME.practice && a.room) practiceThink(a, dt); else botThink(a, dt); }   // every range bot uses the range brain (stand, face you, shoot/fake as its role says)
   }
   for (const a of agents) recordTick(a, dt);     // lag-compensation history — everyone's backtrack reads this
   updateHostages(dt); updateNades(dt); updateAreas(dt); updateEffects(dt); updatePractice(dt);

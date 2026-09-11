@@ -16,7 +16,7 @@ import {
 } from './world.js';
 import { generateGridNav } from './map.js';
 import { scene } from './core.js';
-import { giveWeapon, aimbotFire } from './combat.js';
+import { giveWeapon, aimbotFire, applyFakeDuck } from './combat.js';
 
 const sp = (x, z, yaw, extra) => Object.assign(new THREE.Vector3(x, 0, z), { yaw }, extra || {});
 export const ROOMS = {
@@ -100,7 +100,7 @@ export function practiceThink(a, dt) {
   let d = want - a.yaw; d = Math.atan2(Math.sin(d), Math.cos(d));
   a.yaw += d * Math.min(1, dt * (a.practiceFighter ? 12 : 3)); a.realYaw = a.yaw;
   a.pitch = 0; a.vel.set(0, 0, 0); a.speedScale = 1;
-  if (a.practiceAA) { a._fdActive = Math.floor(performance.now() / 1500) % 2 === 0; }   // fake duck on for 1.5s, off for 1.5s
+  if (a.practiceAA) { a._fdActive = Math.floor(performance.now() / 1500) % 2 === 0; a.crouch = false; applyFakeDuck(a); }   // fake duck on for 1.5s, off for 1.5s (really ducks, like a bind)
   if (a.practiceFighter && h.alive && GAME.phase === "live" && roomOf(h.pos) === 'fight') aimbotFire(a);
 }
 export function updatePractice(dt) {

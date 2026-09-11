@@ -238,8 +238,12 @@ export function spawnAgent(team, isHuman, name) {
   return a;
 }
 
+/* The stance the SERVER sees. Fake duck (the real HvH one): you are ducked for everyone — model and
+   hitboxes down behind the cover — while your eye stays at standing height so you can shoot over it;
+   the only moment your standing hitboxes exist is the exposure window right after your own shot. */
+export function stanceCrouch(a) { return fakeDucking(a) ? !(a.exposeT > 0) : !!a.crouch; }
 export function hitboxes(a) {
-  const s = a.crouch ? 0.72 : 1, fy = a.pos.y;            // fy = feet height (0 on flat maps; floor Y on mesh maps / when airborne)
+  const s = stanceCrouch(a) ? 0.72 : 1, fy = a.pos.y;            // fy = feet height (0 on flat maps; floor Y on mesh maps / when airborne)
   const x = a.pos.x, z = a.pos.z;
   return [
     { group: "head", minX: x - 7, maxX: x + 7, minY: fy + 60 * s, maxY: fy + 73 * s, minZ: z - 7, maxZ: z + 7 },
@@ -249,7 +253,7 @@ export function hitboxes(a) {
   ];
 }
 export function hitboxCenter(a, group) {
-  const s = a.crouch ? 0.72 : 1;
+  const s = stanceCrouch(a) ? 0.72 : 1;
   const y = a.pos.y + { head: 66, chest: 53, stomach: 40, legs: 17 }[group] * s;
   return new THREE.Vector3(a.pos.x, y, a.pos.z);
 }
@@ -282,15 +286,15 @@ export function updateAgentVisual(a) {
     // FAKE DUCK: the stance the server has is not the one on screen, so the fake is at the wrong HEIGHT
     // as well as the wrong side — an un-resolved shot sails over a crouch or under a stand.
     // the real stance is forced DOWN by applyFakeDuck, so the fake sits a stance-height above it
-    if (aa.fakeduck) off.y = (a.crouch ? 1 : -1) * (EYE_STAND - EYE_CROUCH);
+    // fake duck no longer fakes a HEIGHT: the server sees you ducked and so does everyone else (stanceCrouch);
+    // its edge is the eye that stays up and the standing hitboxes that only exist in your own shot's window
     if (mag === 0 && !aa.fakeduck) a._desyncOff = null;         // no angle and no fake duck is no fake at all
   } else a._desyncOff = null;
   // DESYNC GHOST: a translucent ghost cham of the LOCAL player's desynced body, shown only in THIRD
   // person (first person always hides the local body), so you can read your fake angle from behind.
   const ghost = a.isHuman && human && human.cheats.visuals && human.cheats.visuals.desyncGhost && a.alive;
-  if (a.isHuman && !GAME.thirdPerson) { a.body.g.visible = false; return; }   // first person never shows the local body
   if (!a.alive) { a.body.g.visible = false; return; }
-  a.body.g.visible = true;
+  a.body.g.visible = !(a.isHuman && !GAME.thirdPerson);   // first person never shows the local body — but its gun and pose still update, so third person is right the instant you switch
   if (a.isHuman) applyGhost(a, GAME.thirdPerson && ghost);   // desync cham only in third person; normal model otherwise
   else if (human && a.team !== human.team) {                  // chams: colour by line-of-sight (visible vs occluded)
     const vz = human.cheats.visuals || {};
@@ -319,7 +323,7 @@ export function updateAgentVisual(a) {
   const shownPitch = aa.on && aa.pitch === "down" ? -1.25 : aa.on && aa.pitch === "up" ? 1.25 : (a.pitch || 0);
   // fake duck renders the stance you are NOT in, so a human aiming at the model is aiming at the fake
   // (the hitboxes an aimbot reads stay on the real one — that half is the desync offset's job)
-  const shown = (fakeDucking(a) && !(a.exposeT > 0)) ? !a.crouch : a.crouch;   // only WHILE fake ducking — merely arming it must not invert the stance
+  const shown = stanceCrouch(a);   // the model shows what the server sees: ducked the whole time you fake duck, standing only in your shot's exposure window
   if (a.body.glb) {   // rigged GLB: stance/walk/run come from the clips; anti-aim is composed onto the bones after the mixer runs
     const b = a.body; b.realYaw = a.realYaw || a.yaw; b.aimYaw = upperYaw; b.pitch = shownPitch; b.crouchShown = shown;
     const dt = Math.min(0.05, Math.max(0, clock.t - (a._visT == null ? clock.t : a._visT))); a._visT = clock.t; updateBodyGLB(a, dt);
@@ -333,7 +337,7 @@ export function updateAgentVisual(a) {
     if (a.body.weapon) { a.body.holder.remove(a.body.weapon); if (a.body.handHolder) a.body.handHolder.remove(a.body.weapon); }
     // a gun mounts on the chest pivot (aim pose); a knife goes in the right hand with the arms relaxed
     const melee = !!(WEAPONS[a.cur] && WEAPONS[a.cur].melee), mount = (melee && a.body.handHolder) ? a.body.handHolder : a.body.holder;
-    a.body.weapon = buildWeaponModel(a.cur); a.body.weapon.scale.setScalar(1.0); mount.add(a.body.weapon); a.body.knifeOut = melee && !!a.body.handHolder;
+    a.body.weapon = buildWeaponModel(a.cur); a.body.weapon.scale.setScalar(melee ? 0.7 : 0.6); mount.add(a.body.weapon); a.body.knifeOut = melee && !!a.body.handHolder;   // world models are built at viewmodel size; 0.6 is a rifle that fits a 78u body
   }
   if (!a.body.glb) a.body.holder.rotation.x = -a.pitch;   // GLB: holder is re-aimed from the hand bone in updateBodyGLB
 }
