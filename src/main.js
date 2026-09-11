@@ -20,7 +20,7 @@ import {
   updateESP, updateReloadRing, updateBloomRing, updateHitChanceHUD, updateScopeOverlay, updateR8Hammer,
   renderScoreboard, centerMessage, showHint, showHintOnce, formatTime, buildCrosshair, anyPanelOpen, audio, setBeepMute, playBeep,
 } from './hud.js';
-import { toggleCheatMenu, buildCheatMenu, loadConfig, saveConfig, syncCheatUI } from './cheats.js';
+import { toggleCheatMenu, buildCheatMenu, loadConfig, saveConfig, syncCheatUI, syncWeaponSel } from './cheats.js';
 import { buildDefaultMap } from './map.js';
 import { loadSourceMap } from './sourcemap_load.js';
 import { meshBackend } from './sourcemap.js';
@@ -92,6 +92,7 @@ addEventListener('keydown', e => {
   if (e.code === "Digit1") { human.equippedNade = null; if (human.slotPrimary) switchTo(human, human.slotPrimary); }    // 1 = rifle/primary
   if (e.code === "Digit2") { human.equippedNade = null; if (human.slotSecondary) switchTo(human, human.slotSecondary); } // 2 = pistol/secondary
   if (e.code === "Digit3") { human.equippedNade = null; switchTo(human, 'knife'); }                                    // 3 = knife
+  if (/^Digit[123]$/.test(e.code)) syncWeaponSel();                                                                    // the Rage tab follows the gun in hand
   if (e.code === "Digit4" || e.code === "KeyG") { equipGrenade(); }                                                    // 4 = grenade
   {
     const aaK = human.cheats.antiaim || {};

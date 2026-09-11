@@ -36,6 +36,42 @@ const ICONS = {
    gun's overrides of them. UI state only — nothing here is saved with the config. */
 const WEP_KEYS = Object.keys(WEAPONS).filter(k => !WEAPONS[k].melee);
 let selWeapon = "global";
+/* The selector defaults to the gun in your hands (knife/nade → the master) whenever the menu opens or
+   you switch weapons while it is open; the drop-down still lets you edit any other gun meanwhile. */
+export function syncWeaponSel() {
+  const h = refs.human; if (!h) return;
+  const want = (h.cur && WEP_KEYS.includes(h.cur)) ? h.cur : "global";
+  if (want === selWeapon) return;
+  selWeapon = want;
+  if ($("#cheatPanel") && $("#cheatPanel").classList.contains("show")) buildCheatMenu();
+}
+
+/* THE OPTIMISED DEFAULT — every value chosen from how this game's own maths scores it, not taste:
+   · min hit chance 55: the gate only DELAYS a shot below it; a miss costs the next round its fire
+     penalty, so ~55 maximises damage-per-second across the weapon set (snipers/deagle/R8 pinned
+     higher — one round, one kill — pistols lower, they spray to trade).
+   · baim-if-lethal + safepoint: a body shot on a desyncer lands whether or not the resolver read the
+     side (DESYNC_SWING), so once the body kills there is no reason to bet on the head.
+   · resolver brute: starts at ~0.46 vs the hardest anti-aim and converges to 0.95 across repeated
+     shots at the same target — better than animation after the second round.
+   · anti-aim jitter 58° + 58° desync + pitch down + fake duck + freestanding: the highest aaQuality
+     the resolver model scores (0.55), and freestanding puts the fake on the side they can shoot.
+   · full backtrack + hide shots + double tap: the whole tickbase edge; double tap wins the conflict.
+   · autowall min damage 25: below that a wallbang is a giveaway, not a kill. */
+export function optimizedCheats() {
+  const c = defaultCheats(true);
+  Object.assign(c.aimbot, { on: true, fov: 180, hitchance: 55, minDmg: 20, silent: true, autoShoot: true, autoScope: true, autoStop: true, autoKnife: true, autoRevolver: true,
+    target: "distance", priority: "head", forceBody: false, baimLethal: true, safepoint: true,
+    weapons: { ssg: { hitchance: 70, minDmg: 60, priority: "head" }, scar: { hitchance: 65, minDmg: 45, priority: "head" }, g3: { hitchance: 65, minDmg: 45, priority: "head" },
+               deagle: { hitchance: 60, minDmg: 30, priority: "head" }, r8: { hitchance: 70, minDmg: 50, priority: "head" },
+               glock: { hitchance: 45, minDmg: 12, priority: "chest" }, usp: { hitchance: 45, minDmg: 12, priority: "chest" }, duals: { hitchance: 40, minDmg: 12, priority: "chest" } } });
+  Object.assign(c.autowall, { on: true, minDmg: 25 });
+  Object.assign(c.resolver, { on: true, mode: "brute", strength: 0.8, memory: 1.0 });
+  Object.assign(c.antiaim, { on: true, yaw: "jitter", jitter: 58, pitch: "down", desync: true, desyncAngle: 58, mode: "freestanding", fakeduck: true, fakeduckMode: "hold" });
+  Object.assign(c.tickbase, { backtrack: MAX_BACKTRACK_TICKS, hideShots: true, doubleTap: true });
+  Object.assign(c.visuals, { esp: true, boxes: true, health: true, name: true, chams: true, hitchance: true, backtrackGhost: true });
+  return c;
+}
 
 /* which tab is open survives a rebuild — toggling a switch that rebuilds the menu
    must not throw you back to the first tab */
@@ -156,8 +192,12 @@ function tabs() {
           ["💾 Save config", () => { saveConfig(); showHint("Config saved"); }],
           ["📂 Load config", () => { if (loadConfig()) { buildCheatMenu(); showHint("Config loaded"); } else showHint("No saved config"); }],
           ["↺ Reset", () => { refs.human.cheats = defaultCheats(false); buildCheatMenu(); showHint("Cheats reset"); }],
+          ["⚡ Optimized default", () => { refs.human.cheats = optimizedCheats(); buildCheatMenu(); updateHUDWeapons(); showHint("Optimized config loaded — save it to keep it"); }],
         ]),
-        note(`Saved to this browser (localStorage, with a cookie fallback) and loaded automatically on boot.`),
+        note(`Saved to this browser (localStorage, with a cookie fallback) and loaded automatically on boot. ` +
+             `<b>Optimized default</b> is the config the game's own maths scores best: 55% master hit chance (snipers/Deagle/R8 ` +
+             `pinned higher, pistols lower), baim-if-lethal + safepoint, brute resolver, 58° jitter + 58° desync + fake duck ` +
+             `+ freestanding, full backtrack, hide shots, double tap, autowall at 25 damage.`),
       ] },
       { title: "Keys", rows: [
         note(`<b>F1</b> aimbot · <b>F2</b> body aim · <b>F3</b> triggerbot · <b>F4</b> autowall · <b>F5</b> anti-aim · ` +
@@ -323,7 +363,7 @@ function btns(defs) {
 export function toggleCheatMenu(force) {
   const p = $("#cheatPanel"); const show = force !== undefined ? force : !p.classList.contains("show");
   p.classList.toggle("show", show);
-  if (show) document.exitPointerLock(); else if (GAME.phase !== "warmup" && GAME.phase !== "editor") renderer.domElement.requestPointerLock();
+  if (show) { syncWeaponSel(); document.exitPointerLock(); } else if (GAME.phase !== "warmup" && GAME.phase !== "editor") renderer.domElement.requestPointerLock();
 }
 export function syncCheatUI() { document.querySelectorAll("#cheatBody .crow").forEach(r => r._sync && r._sync()); }
 
